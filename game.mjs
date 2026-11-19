@@ -188,7 +188,7 @@ export function pace(s, period, at, actual, target) {
 export function targetProgress(s, t, now) {
   const range = C.periodRange(t.period, now, s.settings.weekStart);
   const entries = s.entries.filter(e => t.kind === 'company' ? e.companyId === t.owner : e.projectId === t.owner);
-  const cc = t.kind === 'company' ? C.byId(s.companies, t.owner)?.currency : C.byId(s.companies, C.byId(s.projects, t.owner)?.companyId)?.currency;
+  const cc = t.kind === 'company' ? C.byId(s.companies, t.owner)?.currency : C.projectCurrency(s, C.byId(s.projects, t.owner));
   let seg = [], amount = 0;
   for (const e of entries) {
     const a = C.entryStats(e, range, now);
