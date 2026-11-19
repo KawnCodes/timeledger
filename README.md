@@ -1,5 +1,7 @@
 # TimeLedger
 
+[Open TimeLedger](https://kawncodes.github.io/timeledger/)
+
 A private, offline-first time and earnings ledger for one person. The app uses vanilla JavaScript, IndexedDB and a service worker. All application files are bundled. There is no build step, account, analytics or third-party runtime dependency.
 
 ## Run and install
@@ -14,7 +16,9 @@ Opening `index.html` directly from iPhone Files does not provide reliable instal
 
 **Cloudflare Pages.** In Workers & Pages, create a Pages application and choose the drag-and-drop / Direct Upload option. Upload the **contents of `docs/`** with `index.html` at the root. Deploy and open the HTTPS address. [Cloudflare instructions](https://developers.cloudflare.com/pages/get-started/direct-upload/)
 
-**GitHub Pages.** In **Settings → Pages**, select **Deploy from a branch**, then **main** and **/docs**. Save and open the published HTTPS URL. All asset paths are relative, including on a project subpath. [GitHub instructions](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
+**GitHub Pages.** This repository publishes the root of the `gh-pages` branch. Source and tests are on `main`. To publish a new release, update `gh-pages` with the contents of `main`’s `docs/` folder, including `.nojekyll`.
+
+For a separate deployment that follows `main` directly, go to **Settings → Pages**, select **Deploy from a branch**, then **main** and **/docs**. Save and open the published HTTPS URL. All asset paths are relative, including on a project subpath. [GitHub instructions](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
 
 [Apple’s iPhone installation guide](https://support.apple.com/guide/iphone/open-as-web-app-iphea86e5236/ios)
 
