@@ -47,5 +47,15 @@ export async function openLedger(name, example=false){
     });
   }
   db.onversionchange=()=>db.close();
-  return {read:()=>transaction(null),write:transaction,subscribe:fn=>{if(channel)channel.onmessage=fn;}};
+  // Sync credentials live beside the ledger but outside it, so backups never contain them.
+  function meta(value){
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction('ledger',value===undefined?'readonly':'readwrite'), store=tx.objectStore('ledger');
+      let result=null;
+      if(value===undefined){const get=store.get('sync');get.onsuccess=()=>{result=get.result??null;};}
+      else if(value===null)store.delete('sync');else store.put(value,'sync');
+      tx.oncomplete=()=>resolve(result);tx.onabort=tx.onerror=()=>reject(tx.error??new Error('Unable to save sync settings.'));
+    });
+  }
+  return {read:()=>transaction(null),write:transaction,subscribe:fn=>{if(channel)channel.onmessage=fn;},readMeta:()=>meta(),writeMeta:v=>meta(v)};
 }
