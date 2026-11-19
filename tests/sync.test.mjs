@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyState, validate, setRate, manual, summary, totalIn, convert, goal, saveGoal, syncMerge, HOUR} from '../docs/core.mjs';
+import {emptyState, validate, setRate, manual, summary, totalIn, convert, goal, saveGoal, syncMerge, rateAt, projectCurrency, HOUR} from '../docs/core.mjs';
 import {createSync, encodeFile, decodeFile, parseRepo, shareable} from '../docs/sync.mjs';
 
 function ledgerWith(currencies) {
@@ -189,4 +189,24 @@ test('devices sync through a GitHub file with merge and replace on sign-in', asy
   assert.equal(tablet.state.entries.length, 3);
   await c.signOut();
   assert.equal(c.account, null);
+});
+
+test('projects can bill in their own currency', () => {
+  const s = ledgerWith(['GBP']); // company c0 bills £100/h
+  s.settings.fx = {rates: {EUR: 1, GBP: 0.8, USD: 1.2, CAD: 1.5, AUD: 1.6, CHF: 0.9, NZD: 1.8}, at: null, source: 'manual'};
+  const p = s.projects[0];
+  assert.deepEqual(rateAt(s, p, 10), {rate: 10000, currency: 'GBP'});
+  // Own currency without an override: the company rate is converted (£100 → $150).
+  p.currency = 'USD';
+  assert.deepEqual(rateAt(s, p, 10), {rate: 15000, currency: 'USD'});
+  // An override in the project's currency wins.
+  setRate(s, 'project', p.id, 12000, 'USD', 5);
+  assert.deepEqual(rateAt(s, p, 10), {rate: 12000, currency: 'USD'});
+  const e = manual(s, p.id, Date.UTC(2026, 0, 5, 9), Date.UTC(2026, 0, 5, 11)); Object.assign(e, {billable: true, approved: 2 * HOUR}); s.entries.push(e);
+  assert.equal(e.currency, 'USD');
+  validate(s);
+  assert.deepEqual(summary(s.entries, [0, Date.UTC(2027, 0, 1)], Date.UTC(2027, 0, 1)).money, {USD: 24000});
+  assert.equal(projectCurrency(s, p), 'USD');
+  p.currency = 'XYZ';
+  assert.throws(() => validate(s), /project/);
 });

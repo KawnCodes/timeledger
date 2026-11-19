@@ -150,7 +150,7 @@ function projectsPage(){
   const list=s.projects.filter(p=>p.archived===showArchived).sort((a,b)=>a.name.localeCompare(b.name));
   const selector='<div class="tabs">'+['Projects','Companies'].map(v=>'<button data-action="project-tab" data-value="'+v+'" aria-pressed="'+(v===projectTab)+'">'+v+'</button>').join('')+'</div>';
   if(projectTab==='Companies')return selector+'<section>'+section('Companies',s.companies.length,button('new-company','Add company','plus','secondary'))+'<div class="card">'+(s.companies.map(c=>'<button class="list-row" data-action="company" '+did(c.id)+'><i class="company-dot" style="background:'+c.color+'"></i><span class="grow"><strong>'+h(c.name)+'</strong><small>'+s.projects.filter(p=>p.companyId===c.id).length+' projects · '+c.currency+'</small></span>'+icon('edit',17)+'</button>').join('')||empty('building','Add your first company','Set a company colour, currency and optional hourly rate.','new-company','Add company'))+'</div></section>';
-  return selector+'<section>'+section(showArchived?'Archived projects':'Active projects',list.length,button('archived',showArchived?'Show active':'Show archived','','text-btn'))+'<div class="card">'+(list.map(p=>'<div class="list-row">'+tile(p)+'<button class="plain grow left" data-action="project" '+did(p.id)+'><strong>'+h(p.name)+'</strong><small>'+h(projectInfo(p).c.name)+(p.ref?' · '+h(p.ref):'')+'</small></button>'+(p.favourite?icon('pin',15):'')+(p.archived?'':ib('quick','Open timer for '+p.name,'timer',did(p.id)))+ib('project-menu','Actions for '+p.name,'more',did(p.id))+'</div>').join('')||empty('projects',showArchived?'No archived projects':'Create your first project',showArchived?'Archived projects keep their work history.':'Group projects by company to start tracking time.',showArchived?'':'new-project','New project'))+'</div></section>';
+  return selector+'<section>'+section(showArchived?'Archived projects':'Active projects',list.length,button('archived',showArchived?'Show active':'Show archived','','text-btn'))+'<div class="card">'+(list.map(p=>'<div class="list-row">'+tile(p)+'<button class="plain grow left" data-action="project" '+did(p.id)+'><strong>'+h(p.name)+'</strong><small>'+h(projectInfo(p).c.name)+' · '+C.projectCurrency(s,p)+(p.ref?' · '+h(p.ref):'')+'</small></button>'+(p.favourite?icon('pin',15):'')+(p.archived?'':ib('quick','Open timer for '+p.name,'timer',did(p.id)))+ib('project-menu','Actions for '+p.name,'more',did(p.id))+'</div>').join('')||empty('projects',showArchived?'No archived projects':'Create your first project',showArchived?'Archived projects keep their work history.':'Group projects by company to start tracking time.',showArchived?'':'new-project','New project'))+'</div></section>';
 }
 function initFilter(){return {period:'week',anchor:C.keyDate(now()),from:C.keyDate(now()),to:C.keyDate(now()),company:'',project:'',status:''};}
 function rangeFor(){
@@ -216,8 +216,8 @@ function projectForm(id='',selectedCompany='',after=null){
   const locked=p&&s.entries.some(e=>e.projectId===id);
   const companyCtrl=s.companies.length?select('companyId',s.companies.map(c=>opt(c.id,c.name,chosen)).join(''),p?'disabled':''):input('companyName','','text','required placeholder="Company name" maxlength="160"');
   showDialog(p?'Edit project':'New project','<div class="form-grid">'+field('Project name',input('name',p?.name,'text','required maxlength="160" placeholder="e.g. Brand identity"'),true)+field('Company',companyCtrl,true)+
-    field('Project reference',input('ref',p?.ref,'text','placeholder="Optional"'))+field('Hourly rate override',input('rate',amt(oldRate),'number','min="0" max="100000000" step="0.01" placeholder="Company default"'))+
-    field('Notes',textArea('notes',p?.notes),true)+'</div>'+checks('fav','Pin to Quick switch',p?.favourite??true)+(p?checks('archived','Archive project',p.archived):'')+(locked?hint('Historical entries retain their company and recorded rate.'):''),
+    field('Currency',select('currency',opt('','Same as company',p?.currency??'')+options(C.currencies,p?.currency??'')))+field('Project reference',input('ref',p?.ref,'text','placeholder="Optional"'))+field('Hourly rate override (project currency)',input('rate',amt(oldRate),'number','min="0" max="100000000" step="0.01" placeholder="Company default"'))+
+    field('Notes',textArea('notes',p?.notes),true)+'</div>'+checks('fav','Pin to Quick switch',p?.favourite??true)+(p?checks('archived','Archive project',p.archived):'')+hint('Without a rate override, the company rate is converted into the project currency at the current exchange rate.')+(locked?hint('Historical entries retain their company, currency and recorded rate. A new currency applies to new work.'):''),
     async(d,form)=>{
       const newId=id||C.uid();
       if(p&&!p.archived&&form.archived.checked&&!confirm('Archive this project and remove it from Quick switch? Its entries will remain available.'))return;
@@ -230,9 +230,9 @@ function projectForm(id='',selectedCompany='',after=null){
         const cur=C.byId(st.projects,newId),archived=!!d.archived;
         if(p)C.requireThat(JSON.stringify(cur)===JSON.stringify(p),'Project changed in another window. Reopen it.');
         C.requireThat(!archived||!C.active(st,newId),'Stop this project timer before archiving.');
-        const record={id:newId,companyId:cid,name:d.name.trim(),ref:d.ref,notes:d.notes,favourite:!archived&&!!d.fav,archived,order:cur?.order??Math.max(-1,...st.projects.map(x=>x.order))+1,recent:cur?.recent??0};
+        const record={id:newId,companyId:cid,currency:d.currency||null,name:d.name.trim(),ref:d.ref,notes:d.notes,favourite:!archived&&!!d.fav,archived,order:cur?.order??Math.max(-1,...st.projects.map(x=>x.order))+1,recent:cur?.recent??0};
         if(cur)Object.assign(cur,record);else st.projects.push(record);
-        const rate=decimal(d.rate);if(rate!==oldRate)C.setRate(st,'project',newId,rate,C.byId(st.companies,cid).currency,p?at:0);
+        const rate=decimal(d.rate),cc=C.projectCurrency(st,record);if(rate!==oldRate||(rate!==null&&(p?.currency??null)!==record.currency))C.setRate(st,'project',newId,rate,cc,p?at:0);
       },p?'Edit project':'Create project',newId);
       if(after)after(newId);else closeDialog();toast('Project saved');
     },p?'Save project':'Create project',!p&&s.companies.length?button('new-company-inline','New company','plus','text-btn'):'');
@@ -553,7 +553,7 @@ function targetsSection(){
 }
 function targetForm(id=''){
   const t=C.byId(s.targets,id);
-  const choices=s.companies.map(c=>opt('company:'+c.id,'Company · '+c.name+' ('+c.currency+')',t&&t.kind+':'+t.owner))+s.projects.filter(p=>!p.archived||t?.owner===p.id).map(p=>opt('project:'+p.id,'Project · '+p.name+' ('+C.byId(s.companies,p.companyId).currency+')',t&&t.kind+':'+t.owner)).join('');
+  const choices=s.companies.map(c=>opt('company:'+c.id,'Company · '+c.name+' ('+c.currency+')',t&&t.kind+':'+t.owner))+s.projects.filter(p=>!p.archived||t?.owner===p.id).map(p=>opt('project:'+p.id,'Project · '+p.name+' ('+C.projectCurrency(s,p)+')',t&&t.kind+':'+t.owner)).join('');
   showDialog(t?'Edit target':'New target','<div class="form-grid">'+field('Target for',select('who',choices,'required'),true)+field('Period',select('period',C.periods.map(p=>opt(p,'Per '+p,t?.period??'month')).join('')))+field('Hours',input('hours',t?.hours??'','number','step="any" min="0.0001" placeholder="Optional"'))+field('Earnings (client currency)',input('money',amt(t?.money),'number','step="0.01" min="0.01" placeholder="Optional"'),true)+'</div>'+hint('Earnings include unreviewed work at its recorded rate.'),
     async d=>{
       const [kind,owner]=d.who.split(':'),hours=d.hours?Number(d.hours):null,m=decimal(d.money);

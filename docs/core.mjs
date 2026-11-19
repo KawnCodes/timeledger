@@ -75,9 +75,14 @@ export function setRate(s, kind, owner, amount, currency, at) {
 export function rateAt(s,p,at) {
   const lookup = (kind,owner) => s.rates.filter(r=>r.kind===kind && r.owner===owner && r.at<=at).sort((a,b)=>b.at-a.at||s.rates.indexOf(b)-s.rates.indexOf(a))[0];
   const company = byId(s.companies,p.companyId);
-  const base=lookup('company',company.id), override=lookup('project',p.id);
-  return {rate:override?.amount ?? base?.amount ?? null,currency:base?.currency ?? company.currency};
+  const base=lookup('company',company.id), override=lookup('project',p.id), cc=projectCurrency(s,p);
+  if(override&&override.amount!==null)return {rate:override.amount,currency:override.currency};
+  // No project rate: use the company rate, converted when the project bills in another currency.
+  const bc=base?.currency??company.currency;
+  return {rate:base?.amount==null?null:convert(base.amount,bc,cc,s.settings.fx),currency:cc};
 }
+// A project bills in its own currency when set, otherwise in its company's.
+export const projectCurrency=(s,p)=>p.currency??byId(s.companies,p.companyId).currency;
 function baseEntry(s,projectId,at,kind,allowArchived=false) {
   const p=byId(s.projects,projectId);
   requireThat(p&&(allowArchived||!p.archived),'Select an active project.');
@@ -245,7 +250,7 @@ export function validate(s) {
   check(pref&&pref.fx&&typeof pref.fx.rates==='object'&&currencies.every(c=>Number.isFinite(pref.fx.rates[c])&&pref.fx.rates[c]>0)&&(pref.fx.at===null||isTime(pref.fx.at))&&['built-in','ECB','manual'].includes(pref.fx.source),'Invalid exchange rates.');
   check(pref&&['unique','logged','approved'].includes(pref.basis)&&currencies.includes(pref.currency)&&Number.isInteger(pref.weekStart)&&pref.weekStart>=0&&pref.weekStart<7&&periods.includes(pref.period)&&['dark','light','system'].includes(pref.theme)&&[1,5,6,10,15,30].includes(pref.rounding)&&typeof pref.collapsed==='boolean'&&(pref.backupAt===null||isTime(pref.backupAt)),'Invalid settings.');
   for(const c of s.companies)check(textField(c.name)&&c.name.trim()&&currencies.includes(c.currency)&&/^#[a-f\d]{6}$/i.test(c.color)&&textField(c.notes)&&textField(c.billing),'Invalid company.');
-  for(const p of s.projects)check(sets.companies.has(p.companyId)&&textField(p.name)&&p.name.trim()&&textField(p.notes)&&textField(p.ref)&&typeof p.archived==='boolean'&&typeof p.favourite==='boolean'&&Number.isFinite(p.order)&&isTime(p.recent),'Invalid project.');
+  for(const p of s.projects)check(sets.companies.has(p.companyId)&&(p.currency===undefined||p.currency===null||currencies.includes(p.currency))&&textField(p.name)&&p.name.trim()&&textField(p.notes)&&textField(p.ref)&&typeof p.archived==='boolean'&&typeof p.favourite==='boolean'&&Number.isFinite(p.order)&&isTime(p.recent),'Invalid project.');
   for(const r of s.rates)check(['company','project'].includes(r.kind)&&sets[r.kind==='project'?'projects':'companies'].has(r.owner)&&minor(r.amount)&&currencies.includes(r.currency)&&isTime(r.at),'Invalid rate.');
   const open=new Set(), focusSpans=[];
   for(const e of s.entries){
