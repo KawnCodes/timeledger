@@ -1,4 +1,4 @@
-// GitHub sync. The ledger is stored as a readable JSON file in a private GitHub repository
+// GitHub sync. The ledger is stored as a readable JSON file in a GitHub repository
 // and every device reads and writes it with a personal access token. The file's Git SHA is
 // the version, so GitHub itself rejects an upload based on an out-of-date copy.
 import {emptyState, syncMerge, validate, requireThat} from './core.mjs';
@@ -86,9 +86,8 @@ export function createSync({ledger, fetch: f = (...a) => fetch(...a)}) {
     requireThat(/^[\w./ -]+\.json$/.test(path) && !path.includes('..'), 'Use a file name ending in .json.');
     const user = await gh('/user', {token});
     const info = await gh('/repos/' + repo, {token});
-    requireThat(info.private, 'That repository is public, so anyone could read your financial records. Use a private repository.');
     requireThat(!info.permissions || info.permissions.push, 'The token can read but not write that repository. Give it Contents: read and write.');
-    const pending = {token, repo: info.full_name, path, branch: info.default_branch, user: user.login, version: null, base: null, pending: true};
+    const pending = {token, repo: info.full_name, path, branch: info.default_branch, user: user.login, public: !info.private, version: null, base: null, pending: true};
     const remote = await pull(pending);
     const remoteState = remote.state ? withLocal(remote.state, await ledger.read()) : null;
     const current = await ledger.read();
@@ -150,7 +149,7 @@ export function createSync({ledger, fetch: f = (...a) => fetch(...a)}) {
   return {
     status, onChange: fn => listeners.add(fn), signIn, finishSignIn, syncNow,
     async load() { meta = await ledger.readMeta(); if (meta?.pending || (meta && !meta.repo)) await save(null); emit({state: meta ? 'idle' : 'signed-out'}); return meta; },
-    get account() { return meta && !meta.pending ? {user: meta.user, repo: meta.repo, path: meta.path} : null; },
+    get account() { return meta && !meta.pending ? {user: meta.user, repo: meta.repo, path: meta.path, public: !!meta.public} : null; },
     async cancelSignIn() { if (meta?.pending) await save(null); },
     async signOut() { await save(null); emit({state: 'signed-out', error: ''}); }
   };

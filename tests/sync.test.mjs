@@ -126,11 +126,13 @@ test('repository file is readable JSON and round-trips', () => {
   assert.throws(() => parseRepo('nope'), /owner\/name/);
 });
 
-test('public repositories and bad tokens are refused', async () => {
+test('public repositories are allowed and bad tokens are refused', async () => {
   const pub = fakeGitHub({repoPrivate: false});
   const a = createSync({ledger: memoryLedger(ledgerWith(['GBP'])), fetch: pub.fetch});
   await a.load();
-  await assert.rejects(a.signIn({token: pub.token, repo: 'me/data'}), /public/);
+  assert.equal((await a.signIn({token: pub.token, repo: 'me/data'})).choice, 'upload');
+  await a.finishSignIn('upload', null, null);
+  assert.equal(a.account.public, true);
   const gh = fakeGitHub();
   await assert.rejects(createSync({ledger: memoryLedger(ledgerWith(['GBP'])), fetch: gh.fetch}).signIn({token: 'github_pat_' + 'y'.repeat(30), repo: 'me/data'}), /rejected the token/);
 });
@@ -145,7 +147,7 @@ test('devices sync through a GitHub file with merge and replace on sign-in', asy
   assert.equal(first.choice, 'upload');
   await a.finishSignIn('upload', first.remote, first.remoteVersion);
   assert.equal(a.status.state, 'synced');
-  assert.deepEqual(a.account, {user: 'me', repo, path: 'timeledger.json'});
+  assert.deepEqual(a.account, {user: 'me', repo, path: 'timeledger.json', public: false});
   const stored = JSON.parse(Buffer.from(gh.files.get('timeledger.json').content, 'base64').toString());
   assert.equal(stored.data.entries.length, 1);
   assert.equal(stored.data.settings.theme, undefined, 'device-only settings stay on the device');

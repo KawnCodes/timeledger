@@ -2,7 +2,7 @@
 
 [Open TimeLedger](https://kawncodes.github.io/timeledger/)
 
-A private, offline-first time and earnings ledger for one person. The app uses vanilla JavaScript, IndexedDB and a service worker. All application files are bundled. There is no build step, analytics or third-party runtime dependency. Optional GitHub sync keeps the ledger in a private repository of yours so several devices share it (see **GitHub sync**).
+A private, offline-first time and earnings ledger for one person. The app uses vanilla JavaScript, IndexedDB and a service worker. All application files are bundled. There is no build step, analytics or third-party runtime dependency. Optional GitHub sync keeps the ledger in a repository of yours so several devices share it (see **GitHub sync**).
 
 ## Run and install
 
@@ -50,15 +50,16 @@ Open sessions count toward live hours. They enter the timesheet when stopped. Co
 
 ## GitHub sync
 
-Your ledger can live in a **private** GitHub repository as a readable JSON file (`timeledger.json`), so every device you connect shares it. No server is needed: the app talks to GitHub's API directly from the browser, so it works on GitHub Pages.
+Your ledger can live in a GitHub repository as a readable JSON file (`timeledger.json`), so every device you connect shares it. No server is needed: the app talks to GitHub's API directly from the browser, so it works on GitHub Pages.
 
-1. On GitHub, create a new **private** repository, for example `timeledger-data`. Don't use the public app repository: anyone could read your records there. The app refuses public repositories.
-2. Go to **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**. Choose **Only select repositories** and pick the data repository. Under **Repository permissions**, set **Contents** to **Read and write**. Choose an expiry you're comfortable with.
-3. In TimeLedger open **Settings → GitHub sync**, enter `owner/repository` and paste the token. Do the same on each device.
+1. Go to **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**. Choose **Only select repositories** and pick the repository for your data (this one, `kawncodes/timeledger`, by default). Under **Repository permissions**, set **Contents** to **Read and write**.
+2. In TimeLedger open **Settings → GitHub sync**. The repository is pre-filled from `docs/config.mjs`; paste the token. Do the same on each device.
 
-If both the repository and the device already hold records, you choose **Merge both**, **Replace this device with the repository** or **Replace the repository with this device**. After that, changes sync a few seconds after each edit, when the app comes to the foreground and every minute while it's open. Each upload is one commit, so the repository's history doubles as a version history you can restore from. Deletions travel between devices. If the same record changes on two devices before they sync, the higher revision wins. Appearance, overview period, sound and the last-backup date stay per device.
+In a public repository anyone can read the ledger file, and the app says so on the sync screen. That's fine for demo data; for real records, use a private repository instead.
 
-The token is stored only in the browser's storage on that device. A fine-grained token limited to one repository with only Contents access can't touch anything else in your account. When it expires, the app asks you to sign in again. To pre-fill the repository name on every device, set `syncRepo` in `docs/config.mjs`.
+If both the repository and the device already hold records, you choose **Merge both**, **Replace this device with the repository** or **Replace the repository with this device**. After that, changes sync a few seconds after each edit, when the app comes to the foreground and every minute while it's open. Each upload is one commit on the default branch, so the history doubles as a version history. Deletions travel between devices. If the same record changes on two devices before they sync, the higher revision wins. Appearance, overview period, sound and the last-backup date stay per device.
+
+The token is stored only in the browser's storage on that device. When it expires, the app asks you to sign in again.
 
 ## Back up and restore
 
