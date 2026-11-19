@@ -2,7 +2,7 @@
 
 [Open TimeLedger](https://kawncodes.github.io/timeledger/)
 
-A private, offline-first time and earnings ledger for one person. The app uses vanilla JavaScript, IndexedDB and a service worker. All application files are bundled. There is no build step, analytics or third-party runtime dependency. An optional account syncs an encrypted copy of the ledger between devices through a small server you deploy yourself (see **Account & sync**).
+A private, offline-first time and earnings ledger for one person. The app uses vanilla JavaScript, IndexedDB and a service worker. All application files are bundled. There is no build step, analytics or third-party runtime dependency. Optional GitHub sync keeps the ledger in a private repository of yours so several devices share it (see **GitHub sync**).
 
 ## Run and install
 
@@ -48,33 +48,17 @@ Earnings use approved billable duration and the entry’s recorded rate. Money i
 
 Open sessions count toward live hours. They enter the timesheet when stopped. Company and project names are linked by stable IDs, and rates are captured per entry. The initial rate acts as the historical default. Later changes apply from the time of editing. You can correct a retrospective entry’s recorded rate explicitly.
 
-## Account & sync
+## GitHub sync
 
-Open **Settings → Account & sync** to create an account or sign in. If both the account and this device already hold records, you choose:
+Your ledger can live in a **private** GitHub repository as a readable JSON file (`timeledger.json`), so every device you connect shares it. No server is needed: the app talks to GitHub's API directly from the browser, so it works on GitHub Pages.
 
-- **Merge both** keeps the records from each side.
-- **Replace this device with the account** discards this device's records.
-- **Replace the account with this device** overwrites the account copy.
+1. On GitHub, create a new **private** repository, for example `timeledger-data`. Don't use the public app repository: anyone could read your records there. The app refuses public repositories.
+2. Go to **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**. Choose **Only select repositories** and pick the data repository. Under **Repository permissions**, set **Contents** to **Read and write**. Choose an expiry you're comfortable with.
+3. In TimeLedger open **Settings → GitHub sync**, enter `owner/repository` and paste the token. Do the same on each device.
 
-After that, changes sync automatically when the app is open and online (on every change, when the app comes to the foreground and every minute). Deletions travel between devices. If the same record changes on two devices before they sync, the higher revision wins. Appearance, overview period and the last-backup date stay per device.
+If both the repository and the device already hold records, you choose **Merge both**, **Replace this device with the repository** or **Replace the repository with this device**. After that, changes sync a few seconds after each edit, when the app comes to the foreground and every minute while it's open. Each upload is one commit, so the repository's history doubles as a version history you can restore from. Deletions travel between devices. If the same record changes on two devices before they sync, the higher revision wins. Appearance, overview period, sound and the last-backup date stay per device.
 
-The password never leaves the device. PBKDF2 (310,000 rounds) derives a login key for the server and a separate AES-GCM key that encrypts the whole ledger before upload, so the server only stores ciphertext. A forgotten password cannot be reset: the account copy is unreadable, but each device keeps its own records, and you can create a new account from one of them.
-
-### Deploy the sync server (Cloudflare Workers, free tier)
-
-The server lives in `server/`. It uses a Cloudflare Worker and a D1 database.
-
-```bash
-cd server
-npx wrangler login
-npx wrangler d1 create timeledger      # copy the database_id into wrangler.toml
-npx wrangler d1 execute timeledger --remote --file=schema.sql
-npx wrangler deploy                    # prints https://timeledger-sync.<you>.workers.dev
-```
-
-Set `ALLOWED_ORIGINS` in `wrangler.toml` to your app's origin (for example `https://kawncodes.github.io`) and deploy again. Put the Worker address in `docs/config.mjs` so it is filled in on the sign-in form, or type it there each time.
-
-To self-host instead, run `node server/node.mjs 8787 /path/to/timeledger-sync.db` (Node 22.13+, no dependencies) behind HTTPS. It serves the same API with SQLite.
+The token is stored only in the browser's storage on that device. A fine-grained token limited to one repository with only Contents access can't touch anything else in your account. When it expires, the app asks you to sign in again. To pre-fill the repository name on every device, set `syncRepo` in `docs/config.mjs`.
 
 ## Back up and restore
 
@@ -86,7 +70,7 @@ Timers save timestamps on each action and reconstruct elapsed time after a resta
 
 ## Tests
 
-From the project root, run **`node --test tests/*.test.mjs`** with Node 22.13 or newer. The deterministic suite covers XP, streaks, goal hits, pace and targets, currency conversion, account sync (against the real server code with SQLite), three-way merge, timers, focus, overlap, DST, calendar goals, billing, allocations, exports, validation, backup merge, persistence transactions and the service-worker cache path.
+From the project root, run **`node --test tests/*.test.mjs`** with Node 22.13 or newer. The deterministic suite covers XP, streaks, goal hits, pace and targets, currency conversion, GitHub sync (against a simulated GitHub API), three-way merge, timers, focus, overlap, DST, calendar goals, billing, allocations, exports, validation, backup merge, persistence transactions and the service-worker cache path.
 
 The separate browser acceptance suite uses an isolated local HTTP server and temporary Chromium profile. Install Python 3, the Playwright Python package and its Chromium browser (`python3 -m playwright install chromium`), then run **`python3 tests/browser_test.py`**. You can also set `CHROMIUM_PATH` to a local Chromium executable. It exercises the real UI, IndexedDB, downloads and a cold browser restart with the server shut down and networking disabled. A physical iPhone remains the final check for Safari installation and native share/print dialogs.
 

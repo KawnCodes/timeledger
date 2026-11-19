@@ -1,7 +1,7 @@
 import * as C from './core.mjs';
 import {openLedger} from './storage.mjs';
 import {createSync} from './sync.mjs';
-import {syncServer} from './config.mjs';
+import {syncRepo} from './config.mjs';
 import * as G from './game.mjs';
 import {play as sfx, soundSetting} from './sound.mjs';
 import {icon} from './icons.mjs';
@@ -62,7 +62,7 @@ async function write(fn,action,entity=''){
   s=await db.write(st=>{const at=Date.now()+(example?(st.demoOffset??0):0);const result=fn(st,at);const next=result??st;if(action)C.audit(next,action,at,entity);return next;});
   render();scheduleSync();return s;
 }
-function scheduleSync(delay=1500){if(!sync?.account)return;clearTimeout(syncTimer);syncTimer=setTimeout(()=>sync.syncNow(),delay);}
+function scheduleSync(delay=5000){if(!sync?.account)return;clearTimeout(syncTimer);syncTimer=setTimeout(()=>sync.syncNow(),delay);}
 // Every currency, converted into the goal currency at the stored exchange rates.
 const combined=amounts=>C.totalIn(amounts,s.settings.currency,s.settings.fx);
 function fxNote(amounts){
@@ -377,7 +377,7 @@ function settingsForm(){
     field('Sound effects',select('sound',opt('on','On',p.sound?'on':'off')+opt('off','Off',p.sound?'on':'off')))+field('Streak counts days when',select('streak',opt('worked','I work 30+ minutes',p.streak)+opt('goal','I hit my daily goal',p.streak)))+
     '<div class="field wide">'+checks('restWeekends','Weekends without work don’t break a streak',p.restWeekends)+'</div>'+
     field('Reportable suggestion',select('rounding',[1,5,6,10,15,30].map(v=>opt(v,'Nearest '+v+' min',p.rounding)).join('')))+'</div>'+hint('Rounding applies when you first approve reportable minutes. Raw timers retain their exact timestamps.')+
-    '<h3>On this device</h3><div class="settings-links">'+(example?'':button('account',sync?.account?'Account & sync · '+sync.account.user:'Account & sync','user','menu-action'))+button('rates','Exchange rates','money','menu-action')+button('goals','Personal goals','target','menu-action')+button('backup','Backup & restore','backup','menu-action')+button('workspace',example?'Example workspace':'Personal workspace','switch','menu-action')+'</div><p class="hint" id="offline-state">'+h(swReady?'App files cached for offline use.':swIssue||'Preparing offline app files…')+'</p>',
+    '<h3>On this device</h3><div class="settings-links">'+(example?'':button('account',sync?.account?'GitHub sync · '+sync.account.repo:'GitHub sync','user','menu-action'))+button('rates','Exchange rates','money','menu-action')+button('goals','Personal goals','target','menu-action')+button('backup','Backup & restore','backup','menu-action')+button('workspace',example?'Example workspace':'Personal workspace','switch','menu-action')+'</div><p class="hint" id="offline-state">'+h(swReady?'App files cached for offline use.':swIssue||'Preparing offline app files…')+'</p>',
     async d=>{await write(st=>{Object.assign(st.settings,{sound:d.sound==='on',streak:d.streak,restWeekends:!!d.restWeekends,theme:d.theme,currency:d.currency,basis:d.basis,weekStart:Number(d.weekStart),rounding:Number(d.rounding)});},'Update settings');closeDialog();toast('Settings saved');},'Save settings');
 }
 function backupForm(){
@@ -414,30 +414,31 @@ async function updateRates(force=false){
 function accountForm(){
   signInPending=null;
   const a=sync.account,st=sync.status;
-  if(a)return showDialog('Account & sync','<p class="intro">This device syncs with your account. Records are encrypted with your password before they leave the device.</p><div class="backup-info"><strong>'+h(a.user)+'</strong><small>'+h(a.server)+'</small><small id="sync-status">'+h(statusText())+'</small></div><div class="toolbar">'+button('sync-now','Sync now','switch','primary')+button('sign-out','Sign out','','secondary')+'</div>'+hint('Changes sync automatically when you are online. If two devices change the same record, the most recent revision is kept.'));
-  showDialog('Account & sync','<p class="intro">Sign in to use your records on several devices. Your password encrypts the data before it is uploaded, so keep it safe: it cannot be reset.</p><div class="form-grid">'+
-    field('Sync server',input('server',syncServer||'','url','placeholder="https://timeledger-sync.example.workers.dev" required'),true)+
-    field('Account name',input('user','','text','autocomplete="username" autocapitalize="none" required minlength="3"'),true)+
-    field('Password',input('password','','password','autocomplete="current-password" required minlength="8"'),true)+'</div>'+
+  if(a)return showDialog('GitHub sync','<p class="intro">This device keeps your ledger in a private GitHub repository as a readable JSON file.</p><div class="backup-info"><strong>'+h(a.user)+'</strong><small><a href="https://github.com/'+h(a.repo)+'/blob/HEAD/'+h(a.path)+'" target="_blank" rel="noopener">'+h(a.repo+' / '+a.path)+'</a></small><small id="sync-status">'+h(statusText())+'</small></div><div class="toolbar">'+button('sync-now','Sync now','switch','primary')+button('sign-out','Sign out','','secondary')+'</div>'+hint('Changes sync automatically when you are online. If two devices change the same record, the most recent revision is kept. Signing out removes the token from this device; your records stay here and in the repository.'));
+  showDialog('GitHub sync','<p class="intro">Keep your ledger in a <b>private</b> GitHub repository so every device you sign in on shares it.</p><div class="form-grid">'+
+    field('Private repository',input('repo',syncRepo,'text','placeholder="you/timeledger-data" autocapitalize="none" autocorrect="off" spellcheck="false" required'),true)+
+    field('Personal access token',input('token','','password','autocomplete="off" spellcheck="false" required placeholder="github_pat_…"'),true)+
+    field('File in the repository',input('path','timeledger.json','text','autocapitalize="none" spellcheck="false" required'),true)+'</div>'+
     (st.error?'<div class="warning">'+h(st.error)+'</div>':'')+
-    '<div class="toolbar">'+button('sign-up','Create account','plus','secondary')+'</div>'+hint('After signing in you can merge this device’s records with the account, or replace them.'),
-    async()=>signIn(false),'Sign in');
+    '<details class="howto"><summary>How to set this up</summary><ol><li>On GitHub, create a new <b>private</b> repository, for example <code>timeledger-data</code>.</li><li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Settings → Developer settings → Fine-grained tokens</a>. Choose <b>Only select repositories</b> and pick that repository.</li><li>Under Repository permissions, set <b>Contents</b> to <b>Read and write</b>. Generate the token and paste it here.</li><li>Use the same repository and token on each device.</li></ol></details>'+
+    hint('The token is stored only on this device. If the repository already holds a ledger, you can merge it with this device’s records or replace them.'),
+    async()=>signIn(),'Sign in');
 }
 function statusText(){const st=sync.status;return st.state==='synced'?'Last synced '+time(st.at):st.state==='syncing'?'Syncing…':st.state==='offline'?'Offline · changes will sync when you reconnect':st.state==='error'?'Sync problem: '+st.error:'Waiting to sync';}
-async function signIn(create){
+async function signIn(){
   const f=$('#editform').elements;
-  if(!f.server.value||!f.user.value||!f.password.value)throw new Error('Enter the server, account name and password.');
-  const submit=$('#editform [type=submit]');if(submit)submit.textContent=create?'Creating account…':'Signing in…';
+  if(!f.repo.value||!f.token.value)throw new Error('Enter the repository and a personal access token.');
+  const submit=$('#editform [type=submit]');if(submit)submit.textContent='Connecting…';
   try{
-    const r=await sync.signIn({server:f.server.value,user:f.user.value,password:f.password.value,create});
+    const r=await sync.signIn({repo:f.repo.value,token:f.token.value,path:f.path.value});
     if(r.choice==='ask'){
       signInPending=r;
-      return showDialog('Merge or replace?','<p class="intro">Your account already has records, and so does this device.</p><div class="warning">Account: '+r.counts.entries+' entries · '+r.counts.projects+' projects · '+r.counts.companies+' companies<br>This device: '+s.entries.length+' entries · '+s.projects.length+' projects · '+s.companies.length+' companies</div>'+
-        hint('Merge keeps the records from both. Replace discards this device’s records and uses the account copy. Download a backup first if you are unsure.')+
-        '<div class="settings-links">'+button('login-merge','Merge both','layers','menu-action')+button('login-replace','Replace this device with the account','download','menu-action')+button('login-upload','Replace the account with this device','backup','menu-action')+button('login-cancel','Cancel','close','menu-action')+'</div>');
+      return showDialog('Merge or replace?','<p class="intro">The repository already has a ledger, and so does this device.</p><div class="warning">Repository: '+r.counts.entries+' entries · '+r.counts.projects+' projects · '+r.counts.companies+' companies<br>This device: '+s.entries.length+' entries · '+s.projects.length+' projects · '+s.companies.length+' companies</div>'+
+        hint('Merge keeps the records from both. Replace discards this device’s records and uses the repository copy. Download a backup first if you are unsure.')+
+        '<div class="settings-links">'+button('login-merge','Merge both','layers','menu-action')+button('login-replace','Replace this device with the repository','download','menu-action')+button('login-upload','Replace the repository with this device','backup','menu-action')+button('login-cancel','Cancel','close','menu-action')+'</div>');
     }
     await sync.finishSignIn(r.choice==='download'?'replace':'upload',r.remote,r.remoteVersion);await refresh();closeDialog();
-    toast(create?'Account created and synced':'Signed in and synced');
+    toast('Connected to GitHub and synced');
   }finally{if(submit?.isConnected)submit.textContent='Sign in';}
 }
 // ---- Game layer: player card, live earnings, Goals page, celebrations ----
@@ -662,17 +663,17 @@ async function action(name,el){
     case 'rates':return ratesForm();
     case 'rates-fetch':await updateRates(true);return ratesForm();
     case 'account':return accountForm();
-    case 'sign-in':case 'sign-up':return signIn(name==='sign-up');
+    case 'sign-in':return signIn();
     case 'login-merge':case 'login-replace':case 'login-upload':{
       const p=signInPending;C.requireThat(p,'Sign in again.');
       const mode=name.slice(6);
-      if(mode==='replace'&&!confirm('Replace every record on this device with the account copy?'))return;
-      if(mode==='upload'&&!confirm('Replace the account copy with the records on this device?'))return;
+      if(mode==='replace'&&!confirm('Replace every record on this device with the repository copy?'))return;
+      if(mode==='upload'&&!confirm('Replace the repository copy with the records on this device?'))return;
       await sync.finishSignIn(mode,p.remote,p.remoteVersion);signInPending=null;await refresh();closeDialog();return toast(mode==='merge'?'Records merged and synced':'Signed in and synced');
     }
     case 'login-cancel':signInPending=null;await sync.cancelSignIn();return accountForm();
     case 'sync-now':await sync.syncNow();return accountForm();
-    case 'sign-out':if(!confirm('Sign out? Your records stay on this device.'))return;await sync.signOut();render();return accountForm();
+    case 'sign-out':if(!confirm('Sign out of GitHub sync on this device? Your records stay on this device and in the repository.'))return;await sync.signOut();render();return accountForm();
     case 'project-tab':projectTab=value;return render();
     case 'archived':showArchived=!showArchived;return render();
     case 'period':await write(st=>{st.settings.period=value;});return;

@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyState, validate, setRate, manual, summary, totalIn, convert, goal, saveGoal, syncMerge, HOUR} from '../docs/core.mjs';
-import {createSync, encrypt, decrypt, deriveKeys} from '../docs/sync.mjs';
-import {handle} from '../server/worker.mjs';
-import {d1} from '../server/node.mjs';
+import {createSync, encodeFile, decodeFile, parseRepo, shareable} from '../docs/sync.mjs';
 
 function ledgerWith(currencies) {
   const s = emptyState();
@@ -88,45 +86,80 @@ function memoryLedger(state) {
     async writeMeta(v) { meta = structuredClone(v); }
   };
 }
-function server() {
-  const env = {DB: d1(), ALLOWED_ORIGINS: '*'};
-  return async (url, init) => handle(new Request(url, init), env);
+// A small stand-in for the GitHub REST API: users, repositories and the contents endpoint.
+function fakeGitHub({repoPrivate = true, token = 'github_pat_' + 'x'.repeat(30)} = {}) {
+  const files = new Map(), blobs = new Map(); let n = 0, commits = 0;
+  const reply = (status, body) => new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
+  const fetch = async (url, init = {}) => {
+    const u = new URL(url), method = init.method ?? 'GET';
+    if (init.headers?.Authorization !== 'Bearer ' + token) return reply(401, {message: 'Bad credentials'});
+    if (u.pathname === '/user') return reply(200, {login: 'me'});
+    if (u.pathname === '/repos/me/data') return reply(200, {full_name: 'me/data', private: repoPrivate, default_branch: 'main', permissions: {push: true}});
+    const blob = /^\/repos\/me\/data\/git\/blobs\/(\w+)$/.exec(u.pathname);
+    if (blob) return reply(200, {content: blobs.get(blob[1]), encoding: 'base64'});
+    const m = /^\/repos\/me\/data\/contents\/(.+)$/.exec(u.pathname);
+    if (!m) return reply(404, {message: 'Not Found'});
+    const path = decodeURIComponent(m[1]), cur = files.get(path);
+    if (method === 'GET') {
+      if (!cur) return reply(404, {message: 'Not Found'});
+      const large = cur.content.length > 2000; // pretend large files need the blob API
+      return reply(200, {type: 'file', sha: cur.sha, encoding: large ? 'none' : 'base64', content: large ? '' : cur.content});
+    }
+    const body = JSON.parse(init.body);
+    if (cur && body.sha !== cur.sha) return reply(409, {message: 'does not match'});
+    if (!cur && body.sha) return reply(409, {message: 'does not match'});
+    const sha = 'sha' + (++n); commits++;
+    files.set(path, {sha, content: body.content}); blobs.set(sha, body.content);
+    return reply(cur ? 200 : 201, {content: {sha}});
+  };
+  return {fetch, token, files, get commits() { return commits; }};
 }
 
-test('ledger encryption round trip rejects a wrong key', async () => {
+test('repository file is readable JSON and round-trips', () => {
   const s = ledgerWith(['GBP']);
-  const {key} = await deriveKeys('someone', 'correct horse', 1000), other = await deriveKeys('someone', 'wrong horse', 1000);
-  const box = await encrypt(s, key);
-  assert.ok(!box.includes('Co GBP'));
-  assert.deepEqual(await decrypt(box, key), s);
-  await assert.rejects(decrypt(box, other.key), /decrypt/);
+  const text = encodeFile(shareable(s));
+  assert.match(text, /"application": "TimeLedger"/);
+  assert.match(text, /"name": "Co GBP"/);
+  assert.equal(decodeFile(text).companies[0].name, 'Co GBP');
+  assert.throws(() => decodeFile('{"hello":1}'), /not a TimeLedger/);
+  assert.equal(parseRepo('https://github.com/me/data.git'), 'me/data');
+  assert.throws(() => parseRepo('nope'), /owner\/name/);
 });
 
-test('accounts sync between devices with merge and replace on sign-in', async () => {
-  const f = server(), url = 'https://sync.test';
+test('public repositories and bad tokens are refused', async () => {
+  const pub = fakeGitHub({repoPrivate: false});
+  const a = createSync({ledger: memoryLedger(ledgerWith(['GBP'])), fetch: pub.fetch});
+  await a.load();
+  await assert.rejects(a.signIn({token: pub.token, repo: 'me/data'}), /public/);
+  const gh = fakeGitHub();
+  await assert.rejects(createSync({ledger: memoryLedger(ledgerWith(['GBP'])), fetch: gh.fetch}).signIn({token: 'github_pat_' + 'y'.repeat(30), repo: 'me/data'}), /rejected the token/);
+});
+
+test('devices sync through a GitHub file with merge and replace on sign-in', async () => {
+  const gh = fakeGitHub(), repo = 'me/data', token = gh.token;
   const t = Date.UTC(2026, 0, 5, 9);
   const phoneState = ledgerWith(['GBP']); work(phoneState, 'p0', t, 1);
-  const phone = memoryLedger(phoneState), a = createSync({ledger: phone, fetch: f});
+  const phone = memoryLedger(phoneState), a = createSync({ledger: phone, fetch: gh.fetch});
   await a.load();
-  await assert.rejects(a.signIn({server: url, user: 'me@example.com', password: 'short', create: true}), /8 characters/);
-  const first = await a.signIn({server: url, user: 'Me@Example.com', password: 'correct horse', create: true});
+  const first = await a.signIn({token, repo});
   assert.equal(first.choice, 'upload');
   await a.finishSignIn('upload', first.remote, first.remoteVersion);
   assert.equal(a.status.state, 'synced');
-  assert.equal(a.account.user, 'me@example.com');
+  assert.deepEqual(a.account, {user: 'me', repo, path: 'timeledger.json'});
+  const stored = JSON.parse(Buffer.from(gh.files.get('timeledger.json').content, 'base64').toString());
+  assert.equal(stored.data.entries.length, 1);
+  assert.equal(stored.data.settings.theme, undefined, 'device-only settings stay on the device');
 
   // A second device with its own records chooses to merge.
   const laptopState = ledgerWith(['USD']); laptopState.companies[0].id = 'c-usd'; laptopState.projects[0].id = 'p-usd'; laptopState.projects[0].companyId = 'c-usd';
   laptopState.rates = []; setRate(laptopState, 'company', 'c-usd', 9000, 'USD', 0); work(laptopState, 'p-usd', t + 3 * HOUR, 2);
-  const laptop = memoryLedger(laptopState), b = createSync({ledger: laptop, fetch: f});
+  const laptop = memoryLedger(laptopState), b = createSync({ledger: laptop, fetch: gh.fetch});
   await b.load();
-  await assert.rejects(b.signIn({server: url, user: 'me@example.com', password: 'wrong password'}), /incorrect/);
-  const second = await b.signIn({server: url, user: 'me@example.com', password: 'correct horse'});
+  const second = await b.signIn({token, repo});
   assert.equal(second.choice, 'ask');
   assert.equal(second.counts.entries, 1);
   await b.finishSignIn('merge', second.remote, second.remoteVersion);
   assert.equal(laptop.state.entries.length, 2);
-  assert.equal(laptop.state.settings.currency, 'GBP');
 
   // The phone picks up the merged ledger, then a deletion travels back.
   await a.syncNow();
@@ -135,38 +168,23 @@ test('accounts sync between devices with merge and replace on sign-in', async ()
   await a.syncNow(); await b.syncNow();
   assert.equal(laptop.state.entries.length, 1);
 
-  // Concurrent offline edits on both devices both survive.
+  // Concurrent offline edits on both devices both survive; a stale upload is retried after merging.
   await phone.write(s => { work(s, 'p0', t + 8 * HOUR, 1); });
   await laptop.write(s => { work(s, 'p0', t + 10 * HOUR, 1); });
   await a.syncNow(); await b.syncNow(); await a.syncNow();
   assert.equal(phone.state.entries.length, 3);
   assert.deepEqual(phone.state.entries.map(e => e.id).sort(), laptop.state.entries.map(e => e.id).sort());
 
-  // A third device replaces its data with the account copy.
-  const tablet = memoryLedger(ledgerWith(['EUR'])), c = createSync({ledger: tablet, fetch: f});
+  // Nothing changed: no extra commit.
+  const before = gh.commits; await a.syncNow(); await b.syncNow();
+  assert.equal(gh.commits, before);
+
+  // A third device replaces its data with the repository copy (the file is now "large").
+  const tablet = memoryLedger(ledgerWith(['EUR'])), c = createSync({ledger: tablet, fetch: gh.fetch});
   await c.load();
-  const third = await c.signIn({server: url, user: 'me@example.com', password: 'correct horse'});
+  const third = await c.signIn({token, repo});
   await c.finishSignIn('replace', third.remote, third.remoteVersion);
   assert.equal(tablet.state.entries.length, 3);
-  assert.ok(!tablet.state.companies.some(x => x.currency === 'EUR'));
-
-  // Signing out ends the server session.
   await c.signOut();
   assert.equal(c.account, null);
-});
-
-test('server rejects stale uploads and bad tokens', async () => {
-  const f = server(), url = 'https://sync.test';
-  const {auth} = await deriveKeys('alice', 'password123', 1000);
-  const post = (path, body, token) => f(url + path, {method: 'POST', headers: {'Content-Type': 'application/json', ...(token ? {Authorization: 'Bearer ' + token} : {})}, body: JSON.stringify(body)});
-  const {token} = await (await post('/v1/signup', {user: 'alice', auth})).json();
-  assert.equal((await post('/v1/signup', {user: 'alice', auth})).status, 409);
-  const put = (baseVersion, tok = token) => f(url + '/v1/ledger', {method: 'PUT', headers: {Authorization: 'Bearer ' + tok}, body: JSON.stringify({baseVersion, data: 'x'})});
-  assert.equal((await put(0)).status, 200);
-  assert.equal((await put(0)).status, 409);
-  assert.equal((await put(1)).status, 200);
-  assert.equal((await put(2, 'f'.repeat(64))).status, 401);
-  const got = await (await f(url + '/v1/ledger', {headers: {Authorization: 'Bearer ' + token}})).json();
-  assert.equal(got.version, 2);
-  assert.equal((await f(url + '/v1/ledger', {method: 'OPTIONS'})).status, 204);
 });
