@@ -208,7 +208,7 @@ function companyForm(id='',after=null){
         const rate=decimal(d.rate);if(!c||r.rate!==rate)C.setRate(st,'company',newId,rate,cc,c?at:0);
       },c?'Edit company':'Create company',newId);
       if(after)after(newId);else closeDialog();toast('Company saved');
-    },c?'Save company':'Create company');
+    },c?'Save company':'Create company',c?button('delete-company','Delete','','danger',did(c.id)):'');
 }
 function projectForm(id='',selectedCompany='',after=null){
   const p=C.byId(s.projects,id),chosen=p?.companyId??selectedCompany;
@@ -235,7 +235,7 @@ function projectForm(id='',selectedCompany='',after=null){
         const rate=decimal(d.rate),cc=C.projectCurrency(st,record);if(rate!==oldRate||(rate!==null&&(p?.currency??null)!==record.currency))C.setRate(st,'project',newId,rate,cc,p?at:0);
       },p?'Edit project':'Create project',newId);
       if(after)after(newId);else closeDialog();toast('Project saved');
-    },p?'Save project':'Create project',!p&&s.companies.length?button('new-company-inline','New company','plus','text-btn'):'');
+    },p?'Save project':'Create project',p?button('delete-project','Delete','','danger',did(p.id)):s.companies.length?button('new-company-inline','New company','plus','text-btn'):'');
 }
 function favouritesForm(){
   const pins=C.favourites(s),others=s.projects.filter(p=>!p.archived&&!p.favourite);
@@ -685,6 +685,17 @@ async function action(name,el){
     case 'new-project':return projectForm();
     case 'entry-project':return projectForm('','',pid=>entryForm('',pid));
     case 'entry':return entryForm(id);
+    case 'delete-company':case 'delete-project':{
+      const company=name==='delete-company',target=company?C.byId(s.companies,id):p,ids=company?s.projects.filter(x=>x.companyId===id).map(x=>x.id):[id];
+      C.requireThat(target,'This was already deleted.');
+      C.requireThat(!s.entries.some(e=>ids.includes(e.projectId)&&e.end===null),'Stop the running timer for '+(company?'this company':'this project')+' before deleting it.');
+      const n=s.entries.filter(e=>ids.includes(e.projectId)).length,plural=(k,w)=>k+' '+w+(k===1?'':'s');
+      const what=(company?[plural(ids.length,'project')]:[]).concat(n?[plural(n,'time entry').replace('entrys','entries')]:[]);
+      if(!confirm('Delete '+target.name+(what.length?' and its '+what.join(' and '):'')+'? This cannot be undone. Download a backup first if you might need them.'))return;
+      await write(st=>{company?C.deleteCompany(st,id):C.deleteProjects(st,[id]);},company?'Delete company':'Delete project',id);
+      if(filter&&(company?filter.company===id:filter.project===id)){filter.company=company?'':filter.company;filter.project='';}
+      closeDialog();render();return toast((company?'Company':'Project')+' deleted');
+    }
     case 'delete-entry':{
       const rev=Number(el.dataset.revision);
       if(!confirm('Delete this entry, its focus history and any confirmed payment?'))return;

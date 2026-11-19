@@ -67,6 +67,26 @@ export function moveFavourite(s,id,dir) {
   if(i<0||j<0||j>=list.length)return;
   [list[i],list[j]]=[list[j],list[i]];list.forEach((p,k)=>p.order=k);
 }
+// Delete projects with everything recorded against them. Running timers must be stopped first.
+export function deleteProjects(s, ids) {
+  ids = new Set(ids);
+  requireThat(!s.entries.some(e => ids.has(e.projectId) && e.end === null), 'Stop the running timer first.');
+  const gone = new Set(s.entries.filter(e => ids.has(e.projectId)).map(e => e.id));
+  s.entries = s.entries.filter(e => !gone.has(e.id));
+  s.payments = s.payments.filter(p => !gone.has(p.entryId));
+  s.adjustments = s.adjustments.filter(a => !gone.has(a.entryId));
+  s.rates = s.rates.filter(r => !(r.kind === 'project' && ids.has(r.owner)));
+  s.targets = s.targets.filter(t => !(t.kind === 'project' && ids.has(t.owner)));
+  s.projects = s.projects.filter(p => !ids.has(p.id));
+  return gone.size;
+}
+export function deleteCompany(s, id) {
+  const entries = deleteProjects(s, s.projects.filter(p => p.companyId === id).map(p => p.id));
+  s.rates = s.rates.filter(r => !(r.kind === 'company' && r.owner === id));
+  s.targets = s.targets.filter(t => !(t.kind === 'company' && t.owner === id));
+  s.companies = s.companies.filter(c => c.id !== id);
+  return entries;
+}
 export function audit(s,action,at,entity='') { s.audit.push({id:uid(),action,at,entity}); }
 export function setRate(s, kind, owner, amount, currency, at) {
   requireThat(amount===null || (Number.isSafeInteger(amount)&&amount>=0&&amount<=1e10),'Enter a valid hourly rate.');

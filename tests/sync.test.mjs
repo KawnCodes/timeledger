@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyState, validate, setRate, manual, summary, totalIn, convert, goal, saveGoal, syncMerge, rateAt, projectCurrency, HOUR} from '../docs/core.mjs';
+import {emptyState, validate, setRate, manual, summary, totalIn, convert, goal, saveGoal, syncMerge, rateAt, projectCurrency, deleteCompany, deleteProjects, timer, HOUR} from '../docs/core.mjs';
 import {createSync, encodeFile, decodeFile, parseRepo, shareable} from '../docs/sync.mjs';
 
 function ledgerWith(currencies) {
@@ -209,4 +209,27 @@ test('projects can bill in their own currency', () => {
   assert.equal(projectCurrency(s, p), 'USD');
   p.currency = 'XYZ';
   assert.throws(() => validate(s), /project/);
+});
+
+test('deleting a company removes its projects and everything recorded against them', () => {
+  const s = ledgerWith(['GBP', 'USD']);
+  const keep = work(s, 'p1', Date.UTC(2026, 0, 5, 9), 1);
+  const gone = work(s, 'p0', Date.UTC(2026, 0, 6, 9), 1); gone.status = 'Paid';
+  s.payments.push({id: 'pay', entryId: gone.id, amount: 100, currency: 'GBP', at: 1});
+  s.adjustments.push({id: 'adj', entryId: gone.id, previous: null, approved: HOUR, at: 1});
+  setRate(s, 'project', 'p0', 5000, 'GBP', 1);
+  s.targets.push({id: 't0', kind: 'company', owner: 'c0', period: 'week', hours: 5, money: null}, {id: 't1', kind: 'project', owner: 'p0', period: 'week', hours: 5, money: null});
+  validate(s);
+  timer(s, 'start', 'p0', Date.UTC(2026, 0, 7, 9));
+  assert.throws(() => deleteCompany(s, 'c0'), /Stop the running timer/);
+  timer(s, 'stop', 'p0', Date.UTC(2026, 0, 7, 10));
+  assert.equal(deleteCompany(s, 'c0'), 2);
+  validate(s);
+  assert.deepEqual(s.companies.map(c => c.id), ['c1']);
+  assert.deepEqual(s.projects.map(p => p.id), ['p1']);
+  assert.deepEqual(s.entries.map(e => e.id), [keep.id]);
+  assert.equal(s.payments.length + s.adjustments.length + s.targets.length, 0);
+  assert.ok(s.rates.every(r => r.owner === 'c1'));
+  assert.equal(deleteProjects(s, ['p1']), 1);
+  assert.equal(validate(s).entries.length, 0);
 });
