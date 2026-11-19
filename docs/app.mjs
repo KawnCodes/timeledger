@@ -1,5 +1,7 @@
 import * as C from './core.mjs';
 import {openLedger} from './storage.mjs';
+import {createSync} from './sync.mjs';
+import {syncServer} from './config.mjs';
 import {icon} from './icons.mjs';
 const $=q=>document.querySelector(q), $$=q=>[...document.querySelectorAll(q)];
 const h=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -33,7 +35,7 @@ const section=(title,count,action='')=>'<div class="section-head"><h2>'+title+(c
 const navs=[['Today','today'],['Timesheet','sheet'],['Projects','projects'],['Reports','reports']];
 const sheet=$('#sheet'),body=$('#sheet-body'),app=$('#app');
 let s,db,view='Today',swReady=false,swIssue='',formSave=null,projectTab='Projects',showArchived=false,toastTimeout,selectedDate='',busy=false,filter;
-let lastDialogFocus=null,backupPending=null,formChange=null,exportPending=null;
+let lastDialogFocus=null,backupPending=null,formChange=null,exportPending=null,sync=null,signInPending=null,syncTimer=null;
 const bases={unique:'Unique clock time',logged:'Total project time',approved:'Reviewed reportable time'};
 const glyphs=['layers','web','orbit','pen','grid','projects'];
 function projectInfo(p){
@@ -56,7 +58,18 @@ sheet.addEventListener('click',e=>{if(e.target===sheet){const r=sheet.getBoundin
 function errorMessage(err){const msg=err?.message??String(err);if(sheet.open&&$('#form-error'))$('#form-error').textContent=msg;else toast(msg);}
 async function write(fn,action,entity=''){
   s=await db.write(st=>{const at=Date.now()+(example?(st.demoOffset??0):0);const result=fn(st,at);const next=result??st;if(action)C.audit(next,action,at,entity);return next;});
-  render();return s;
+  render();scheduleSync();return s;
+}
+function scheduleSync(delay=1500){if(!sync?.account)return;clearTimeout(syncTimer);syncTimer=setTimeout(()=>sync.syncNow(),delay);}
+// Every currency, converted into the goal currency at the stored exchange rates.
+const combined=amounts=>C.totalIn(amounts,s.settings.currency,s.settings.fx);
+function fxNote(amounts){
+  const other=Object.keys(amounts).filter(k=>k!==s.settings.currency&&amounts[k]);
+  return other.length?'Includes '+other.map(k=>money(amounts[k],k)).join(' + ')+' converted to '+s.settings.currency:'';
+}
+function syncLabel(){
+  if(example)return 'Sample data';if(!sync?.account)return 'On this device';
+  return ({syncing:'Syncing…',offline:'Offline · will sync',error:'Sync problem'})[sync.status.state]??'Synced · '+sync.account.user;
 }
 function dialogSubmit(e){
   e.preventDefault();if(!formSave||busy)return;
@@ -69,7 +82,7 @@ document.addEventListener('change',e=>{if(e.target.closest('#editform'))formChan
 const setView=name=>{closeDialog();view=name;location.hash=name.toLowerCase();render();window.scrollTo(0,0);};
 addEventListener('hashchange',()=>{const v=navs.find(([n])=>'#'+n.toLowerCase()===location.hash);if(v&&view!==v[0]){view=v[0];render();}});
 function navHtml(){return navs.map(([n,i])=>'<button data-action="nav" data-page="'+n+'" class="navitem '+(view===n?'selected':'')+'" '+(view===n?'aria-current="page"':'')+'>'+icon(i,20)+'<span>'+n+'</span></button>').join('');}
-function workspaceButton(){return '<button class="workspace" data-action="workspace"><span class="workspace-avatar">'+icon(example?'layers':'user',19)+'</span><span><strong>'+(example?'Example workspace':'Personal workspace')+'</strong><small>'+(example?'Sample data':'On this device')+'</small></span>'+icon('down',15)+'</button>';}
+function workspaceButton(){return '<button class="workspace" data-action="workspace"><span class="workspace-avatar">'+icon(example?'layers':'user',19)+'</span><span><strong>'+(example?'Example workspace':'Personal workspace')+'</strong><small class="sync-label">'+h(syncLabel())+'</small></span>'+icon('down',15)+'</button>';}
 function render(){
   if(!s)return;
   document.documentElement.dataset.theme=s.settings.theme;
@@ -85,7 +98,7 @@ function render(){
 }
 function goalsPanel(){
   const p=s.settings.period,range=C.periodRange(p,now(),s.settings.weekStart),sum=C.summary(s.entries,range,now()),goal=C.goal(s,p,now());
-  const units=sum[s.settings.basis],earn=sum.money[s.settings.currency]??0;
+  const units=sum[s.settings.basis],earn=combined(sum.money),note=fxNote(sum.money);
   function metric(label,ico,value,current,target,remaining,moneyMode){
     const progress=C.progress(current,target);
     return '<div class="metric '+(moneyMode?'earn':'hours')+'"><div class="metric-name">'+icon(ico,16)+label+'</div><div class="metric-number">'+value+'</div>'+
@@ -93,7 +106,7 @@ function goalsPanel(){
   }
   return '<section class="overview '+(s.settings.collapsed?'collapsed':'')+'"><div class="overview-head"><div class="overview-title">'+icon('target',19)+'<h2>Work overview</h2></div><div class="periods" aria-label="Goal period">'+C.periods.map(n=>'<button data-action="period" data-value="'+n+'" aria-pressed="'+(n===p)+'">'+cap(n)+'</button>').join('')+'</div>'+ib('collapse',s.settings.collapsed?'Expand work overview':'Collapse work overview',s.settings.collapsed?'down':'up','','overview-toggle')+'</div>'+
     (s.settings.collapsed?'':'<div class="metrics">'+metric('Working hours','clock',dur(units),units,goal.hours===null?null:goal.hours*C.HOUR,dur,false)+metric('Estimated earnings','money',money(earn),earn,goal.money,v=>money(v,undefined,true),true)+'</div><div class="overview-foot"><span>'+icon('clock',13)+h(bases[s.settings.basis])+'</span>'+button('goals','Edit goals','sliders','hero-link')+'</div>'+
-    (sum.incomplete.has(s.settings.currency)?'<div class="estimate-alert">Estimate incomplete · missing hourly rate</div>':''))+'</section>';
+    (note?'<p class="fx-note">'+h(note)+'</p>':'')+(sum.incomplete.size?'<div class="estimate-alert">Estimate incomplete · missing hourly rate</div>':''))+'</section>';
 }
 function badge(text,cls=''){return '<span class="badge '+cls+'">'+h(text)+'</span>';}
 function stateLabel(e){const st=C.conditionOf(e);return '<span class="state-label '+st.toLowerCase()+'"><i></i>'+st+'</span>';}
@@ -174,7 +187,7 @@ function recordsPage(){
   const label=dateLabel(range[0])+' – '+dateLabel(range[1]-1);
   const payments={};for(const p of s.payments){const e=C.byId(s.entries,p.entryId);if(p.at>=range[0]&&p.at<range[1]&&(!filter.company||e.companyId===filter.company)&&(!filter.project||e.projectId===filter.project)&&(!filter.status||e.status===filter.status))payments[p.currency]=(payments[p.currency]??0)+p.amount;}
   const metrics=[['Logged time',dur(sum.logged)],['Unique clock time',dur(sum.unique)],['Overlap excess',dur(sum.overlap)],['Reviewed reportable',dur(sum.approved)]];
-  if(report)metrics.push(['Estimated billable',allAmounts(sum.money,sum.incomplete)],['Invoiced incl. paid',allAmounts(sum.invoiced,sum.invoicedIncomplete)],['Confirmed receipts¹',allAmounts(payments)]);
+  if(report)metrics.push(['Estimated billable',allAmounts(sum.money,sum.incomplete)],['Estimated total in '+s.settings.currency,money(combined(sum.money))+(sum.incomplete.size?' (incomplete)':'')],['Invoiced incl. paid',allAmounts(sum.invoiced,sum.invoicedIncomplete)],['Confirmed receipts¹',allAmounts(payments)]);
   return filterUI()+'<section>'+section(label,null)+'<div class="stat-grid">'+metrics.map(([k,v])=>'<div class="stat"><small>'+k+'</small><strong>'+h(v)+'</strong></div>').join('')+'</div>'+(report?hint('¹ Confirmed receipts use the payment date. Work totals use the session dates. Open timers appear on Today.'):'')+'</section>'+
     '<section>'+section('Work entries',entries.length,report?'<div class="toolbar">'+button('export','CSV','download','secondary compact','data-value="CSV" '+(!entries.length?'disabled':''))+button('export','Print','print','secondary compact','data-value="Print" '+(!entries.length?'disabled':''))+'</div>':'')+'<div class="card">'+(entries.length?reportRows(entries,range):empty('sheet','No entries in this view','Choose another date range or add a work entry.','entry','Add entry'))+'</div></section>'+grouped(entries,range);
 }
@@ -345,7 +358,7 @@ function goalForm(){
   showDialog('Personal goals','<div class="form-grid">'+field('Period',select('period',C.periods.map(p=>opt(p,cap(p),initial)).join('')))+field('Date in period',input('goalDate',C.keyDate(now()),'date','required'))+
     field('Apply to',select('scope',opt('overrides','Only this period','overrides')+opt('defaults','Recurring default from this period','overrides')),true)+
     field('Hours target',input('hours','','number','step="any" min="0.0001" placeholder="No target"'))+field('Earnings target ('+s.settings.currency+')',input('money','','number','step="0.01" min="0.01" placeholder="No target"'))+'</div>'+
-    '<p class="hint" id="goal-source"></p>'+hint('Leave either target blank to clear it. Earlier periods keep their targets.')+hint('Hours use '+bases[s.settings.basis].toLowerCase()+'. Earnings use approved billable work in '+s.settings.currency+'.'),
+    '<p class="hint" id="goal-source"></p>'+hint('Leave either target blank to clear it. Earlier periods keep their targets.')+hint('Hours use '+bases[s.settings.basis].toLowerCase()+'. Earnings use approved billable work in every currency, converted to '+s.settings.currency+'.'),
     async d=>{await write(st=>{C.saveGoal(st,d.period,+C.localDate(d.goalDate),d.hours?Number(d.hours):null,decimal(d.money),d.scope);},'Update goal');closeDialog();toast('Goals saved');},'Save goals','',(el,form)=>{if(['period','goalDate','scope'].includes(el.name))load(form);});
   function load(form){
     const f=form.elements;if(!f.goalDate.value)return;const at=+C.localDate(f.goalDate.value),key=C.keyDate(C.periodRange(f.period.value,at,s.settings.weekStart)[0]);
@@ -358,7 +371,7 @@ function settingsForm(){
   showDialog('Settings','<div class="form-grid">'+field('Appearance',select('theme',['system','light','dark'].map(v=>opt(v,cap(v),p.theme)).join('')))+field('Goal currency',select('currency',options(C.currencies,p.currency)))+
     field('Hours calculation basis',select('basis',Object.entries(bases).map(([v,n])=>opt(v,n,p.basis)).join('')),true)+field('Week begins',select('weekStart',['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map((v,i)=>opt(i,v,p.weekStart)).join('')))+
     field('Reportable suggestion',select('rounding',[1,5,6,10,15,30].map(v=>opt(v,'Nearest '+v+' min',p.rounding)).join('')))+'</div>'+hint('Rounding applies when you first approve reportable minutes. Raw timers retain their exact timestamps.')+
-    '<h3>On this device</h3><div class="settings-links">'+button('goals','Personal goals','target','menu-action')+button('backup','Backup & restore','backup','menu-action')+button('workspace',example?'Example workspace':'Personal workspace','switch','menu-action')+'</div><p class="hint" id="offline-state">'+h(swReady?'App files cached for offline use.':swIssue||'Preparing offline app files…')+'</p>',
+    '<h3>On this device</h3><div class="settings-links">'+(example?'':button('account',sync?.account?'Account & sync · '+sync.account.user:'Account & sync','user','menu-action'))+button('rates','Exchange rates','money','menu-action')+button('goals','Personal goals','target','menu-action')+button('backup','Backup & restore','backup','menu-action')+button('workspace',example?'Example workspace':'Personal workspace','switch','menu-action')+'</div><p class="hint" id="offline-state">'+h(swReady?'App files cached for offline use.':swIssue||'Preparing offline app files…')+'</p>',
     async d=>{await write(st=>{Object.assign(st.settings,{theme:d.theme,currency:d.currency,basis:d.basis,weekStart:Number(d.weekStart),rounding:Number(d.rounding)});},'Update settings');closeDialog();toast('Settings saved');},'Save settings');
 }
 function backupForm(){
@@ -367,6 +380,59 @@ function backupForm(){
     '<h3>Restore a backup</h3>'+field('TimeLedger JSON file','<input type="file" name="backupFile" accept=".json,application/json">')+'<div id="backup-options"></div>'+
     hint('A backup includes open timers, focus, entries, rates, goals and payments. Clearing site data or deleting the app can remove your records. Keep regular copies.'),
     null,'','',async(el)=>{if(el.name!=='backupFile')return;try{backupPending=null;$('#backup-options').innerHTML='';const file=el.files[0];if(!file)return;const parsed=C.decodeBackup(await file.text());backupPending=parsed;$('#backup-options').innerHTML='<div class="warning">'+parsed.entries.length+' entries · '+parsed.projects.length+' projects · '+parsed.companies.length+' companies</div>'+hint('Merge adds missing records and keeps local settings. Conflicting records stop the merge. Replace uses the entire backup.')+'<div class="toolbar">'+button('restore-merge','Merge records','','secondary')+button('restore-replace','Replace all data','','danger')+'</div>';$('#form-error').textContent='';}catch(err){errorMessage(err);}});
+}
+function ratesForm(){
+  const fx=s.settings.fx,cc=s.settings.currency,others=C.currencies.filter(c=>c!==cc);
+  const rate=c=>(fx.rates[c]/fx.rates[cc]).toPrecision(6).replace(/\.?0+$/,'');
+  showDialog('Exchange rates','<p class="intro">Earnings in other currencies are converted to your goal currency, '+cc+', for totals and goals. Each entry keeps its original currency.</p><div class="form-grid">'+
+    others.map(c=>field('1 '+cc+' in '+c,input('fx-'+c,rate(c),'number','step="any" min="0.000001" required'))).join('')+'</div>'+
+    '<p class="hint">'+h(fx.source==='ECB'?'European Central Bank reference rates, '+dateLabel(fx.at)+'.':fx.source==='manual'?'Entered manually'+(fx.at?' on '+dateLabel(fx.at):'')+'.':'Approximate built-in rates. Connect to the internet to load current rates.')+'</p>'+
+    button('rates-fetch','Load current rates','download','secondary')+hint('Saving your own rates stops automatic updates until you load current rates again.'),
+    async d=>{await write(st=>{
+      const base=st.settings.fx.rates[cc],rates={...st.settings.fx.rates};
+      for(const c of others){const v=Number(d['fx-'+c]);C.requireThat(v>0&&Number.isFinite(v),'Enter a positive rate for '+c+'.');rates[c]=v*base;}
+      st.settings.fx={rates,at:Date.now(),source:'manual'};
+    },'Update exchange rates');closeDialog();toast('Exchange rates saved');},'Save rates');
+}
+async function updateRates(force=false){
+  const fx=s.settings.fx;
+  if(!navigator.onLine||(!force&&(fx.source==='manual'||(fx.at&&Date.now()-fx.at<12*C.HOUR))))return;
+  try{
+    const res=await fetch('https://api.frankfurter.dev/v1/latest?base=EUR&symbols='+C.currencies.filter(c=>c!=='EUR').join(','));
+    const data=await res.json();C.requireThat(res.ok&&data.rates,'Unable to load exchange rates.');
+    const at=+new Date(data.date+'T16:00:00Z');
+    await write(st=>{st.settings.fx={rates:{...st.settings.fx.rates,...data.rates,EUR:1},at:Number.isSafeInteger(at)?at:Date.now(),source:'ECB'};});
+    if(force)toast('Exchange rates updated');
+  }catch(err){if(force)throw new Error('Unable to load exchange rates. Check your connection and try again.');}
+}
+function accountForm(){
+  signInPending=null;
+  const a=sync.account,st=sync.status;
+  if(a)return showDialog('Account & sync','<p class="intro">This device syncs with your account. Records are encrypted with your password before they leave the device.</p><div class="backup-info"><strong>'+h(a.user)+'</strong><small>'+h(a.server)+'</small><small id="sync-status">'+h(statusText())+'</small></div><div class="toolbar">'+button('sync-now','Sync now','switch','primary')+button('sign-out','Sign out','','secondary')+'</div>'+hint('Changes sync automatically when you are online. If two devices change the same record, the most recent revision is kept.'));
+  showDialog('Account & sync','<p class="intro">Sign in to use your records on several devices. Your password encrypts the data before it is uploaded, so keep it safe: it cannot be reset.</p><div class="form-grid">'+
+    field('Sync server',input('server',syncServer||'','url','placeholder="https://timeledger-sync.example.workers.dev" required'),true)+
+    field('Account name',input('user','','text','autocomplete="username" autocapitalize="none" required minlength="3"'),true)+
+    field('Password',input('password','','password','autocomplete="current-password" required minlength="8"'),true)+'</div>'+
+    (st.error?'<div class="warning">'+h(st.error)+'</div>':'')+
+    '<div class="toolbar">'+button('sign-up','Create account','plus','secondary')+'</div>'+hint('After signing in you can merge this device’s records with the account, or replace them.'),
+    async()=>signIn(false),'Sign in');
+}
+function statusText(){const st=sync.status;return st.state==='synced'?'Last synced '+time(st.at):st.state==='syncing'?'Syncing…':st.state==='offline'?'Offline · changes will sync when you reconnect':st.state==='error'?'Sync problem: '+st.error:'Waiting to sync';}
+async function signIn(create){
+  const f=$('#editform').elements;
+  if(!f.server.value||!f.user.value||!f.password.value)throw new Error('Enter the server, account name and password.');
+  const submit=$('#editform [type=submit]');if(submit)submit.textContent=create?'Creating account…':'Signing in…';
+  try{
+    const r=await sync.signIn({server:f.server.value,user:f.user.value,password:f.password.value,create});
+    if(r.choice==='ask'){
+      signInPending=r;
+      return showDialog('Merge or replace?','<p class="intro">Your account already has records, and so does this device.</p><div class="warning">Account: '+r.counts.entries+' entries · '+r.counts.projects+' projects · '+r.counts.companies+' companies<br>This device: '+s.entries.length+' entries · '+s.projects.length+' projects · '+s.companies.length+' companies</div>'+
+        hint('Merge keeps the records from both. Replace discards this device’s records and uses the account copy. Download a backup first if you are unsure.')+
+        '<div class="settings-links">'+button('login-merge','Merge both','layers','menu-action')+button('login-replace','Replace this device with the account','download','menu-action')+button('login-upload','Replace the account with this device','backup','menu-action')+button('login-cancel','Cancel','close','menu-action')+'</div>');
+    }
+    await sync.finishSignIn(r.choice==='download'?'replace':'upload',r.remote,r.remoteVersion);await refresh();closeDialog();
+    toast(create?'Account created and synced':'Signed in and synced');
+  }finally{if(submit?.isConnected)submit.textContent='Sign in';}
 }
 function downloadFile(content,type,name){const url=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
 function workspaceForm(){
@@ -399,7 +465,7 @@ async function finishExport(d=null){
   },'Prepare '+type+' report');
   closeDialog();const entries=ids.map(id=>C.byId(s.entries,id));
   if(type==='CSV'){downloadFile(C.csv(s,entries,range,now()),'text/csv;charset=utf-8','TimeLedger-'+C.keyDate(range[0])+'-'+C.keyDate(range[1]-1)+'.csv');toast('CSV exported');}
-  else{const a=C.summary(entries,range,now());$('#printout').innerHTML='<h1>TimeLedger</h1><h2>Timesheet</h2><p>'+dateLabel(range[0])+' – '+dateLabel(range[1]-1)+'</p><p>Logged '+dur(a.logged)+' · Unique '+dur(a.unique)+' · Overlap '+dur(a.overlap)+' · Reviewed '+dur(a.approved)+'</p><p>Estimated payable '+h(allAmounts(a.money,a.incomplete))+'</p>'+reportRows(entries,range,true)+grouped(entries,range);window.print();}
+  else{const a=C.summary(entries,range,now());$('#printout').innerHTML='<h1>TimeLedger</h1><h2>Timesheet</h2><p>'+dateLabel(range[0])+' – '+dateLabel(range[1]-1)+'</p><p>Logged '+dur(a.logged)+' · Unique '+dur(a.unique)+' · Overlap '+dur(a.overlap)+' · Reviewed '+dur(a.approved)+'</p><p>Estimated payable '+h(allAmounts(a.money,a.incomplete))+(Object.keys(a.money).length>1?' · ≈ '+h(money(combined(a.money)))+' total':'')+'</p>'+reportRows(entries,range,true)+grouped(entries,range);window.print();}
   exportPending=null;
 }
 async function action(name,el){
@@ -413,6 +479,20 @@ async function action(name,el){
     case 'settings':return settingsForm();
     case 'goals':return goalForm();
     case 'backup':return backupForm();
+    case 'rates':return ratesForm();
+    case 'rates-fetch':await updateRates(true);return ratesForm();
+    case 'account':return accountForm();
+    case 'sign-in':case 'sign-up':return signIn(name==='sign-up');
+    case 'login-merge':case 'login-replace':case 'login-upload':{
+      const p=signInPending;C.requireThat(p,'Sign in again.');
+      const mode=name.slice(6);
+      if(mode==='replace'&&!confirm('Replace every record on this device with the account copy?'))return;
+      if(mode==='upload'&&!confirm('Replace the account copy with the records on this device?'))return;
+      await sync.finishSignIn(mode,p.remote,p.remoteVersion);signInPending=null;await refresh();closeDialog();return toast(mode==='merge'?'Records merged and synced':'Signed in and synced');
+    }
+    case 'login-cancel':signInPending=null;await sync.cancelSignIn();return accountForm();
+    case 'sync-now':await sync.syncNow();return accountForm();
+    case 'sign-out':if(!confirm('Sign out? Your records stay on this device.'))return;await sync.signOut();render();return accountForm();
     case 'project-tab':projectTab=value;return render();
     case 'archived':showArchived=!showArchived;return render();
     case 'period':await write(st=>{st.settings.period=value;});return;
@@ -469,12 +549,18 @@ for(const type of ['pointerup','pointercancel','pointermove'])document.addEventL
 document.addEventListener('click',e=>{if(held){held=false;e.preventDefault();e.stopImmediatePropagation();}},true);
 async function refresh(){if(db){try{s=await db.read();render();}catch(err){errorMessage(err);}}}
 addEventListener('pageshow',refresh);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-addEventListener('online',render);addEventListener('offline',render);
+addEventListener('online',()=>{render();scheduleSync(0);updateRates();});document.addEventListener('visibilitychange',()=>{if(!document.hidden)scheduleSync(0);});addEventListener('offline',render);
 async function boot(){
   try{
     db=await openLedger(example?'example':'personal',example);s=await db.read();db.subscribe(refresh);
     filter=initFilter();view=navs.find(([n])=>'#'+n.toLowerCase()===location.hash)?.[0]??'Today';
     render();setInterval(tick,1000);
+    if(!example){
+      sync=createSync({ledger:db});
+      sync.onChange(st=>{const el=$('.sync-label');if(el)el.textContent=syncLabel();const ss=$('#sync-status');if(ss)ss.textContent=statusText();if(st.state==='synced'&&st.changed&&!sheet.open)refresh();});
+      await sync.load();scheduleSync(0);setInterval(()=>{if(!document.hidden)scheduleSync(0);},60000);
+    }
+    updateRates();
     if('serviceWorker' in navigator){
       try{
         const reg=await navigator.serviceWorker.register('./sw.js');

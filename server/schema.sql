@@ -1,0 +1,19 @@
+CREATE TABLE IF NOT EXISTS users (
+  name TEXT PRIMARY KEY,
+  salt TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  failures INTEGER NOT NULL DEFAULT 0,
+  locked_until INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tokens (
+  hash TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ledgers (
+  name TEXT PRIMARY KEY,
+  version INTEGER NOT NULL,
+  data TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);

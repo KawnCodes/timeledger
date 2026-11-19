@@ -4,6 +4,18 @@ export const periods = ['day', 'week', 'month', 'year'];
 export const statuses = ['Unreported', 'Submitted', 'Invoiced', 'Paid'];
 export const currencies = ['GBP','EUR','USD','CAD','AUD','CHF','NZD'];
 export const uid = () => crypto.randomUUID();
+// Approximate fallback exchange rates (units per 1 EUR). Replaced by published ECB rates when online.
+export const defaultFx = () => ({rates:{EUR:1,GBP:0.86,USD:1.16,CAD:1.62,AUD:1.78,CHF:0.93,NZD:2.02},at:null,source:'built-in'});
+export function convert(minor, from, to, fx) {
+  if (from === to || !minor) return minor;
+  const a = fx?.rates?.[from], b = fx?.rates?.[to];
+  requireThat(a > 0 && b > 0, 'Missing exchange rate for '+from+' or '+to+'.');
+  return Math.round(minor * b / a);
+}
+// Sum a {currency: minor} map in one currency at the stored exchange rates.
+export function totalIn(amounts, to, fx) {
+  return Object.entries(amounts).reduce((n,[cc,v])=>n+convert(v,cc,to,fx),0);
+}
 export function requireThat(condition, message) { if (!condition) throw new Error(message); }
 export const keyDate = ms => {
   const d = new Date(ms);
@@ -43,7 +55,7 @@ export function clockValue(date, clock, later = false) {
 export function emptyState() {
   return {schema:1, companies:[], projects:[], entries:[], rates:[], defaults:[], overrides:[],
     batches:[], payments:[], adjustments:[], audit:[], settings:{basis:'unique', currency:'GBP', weekStart:1,
-      theme:'system', period:'day', collapsed:false, rounding:1, backupAt:null}};
+      theme:'system', period:'day', collapsed:false, rounding:1, backupAt:null, fx:defaultFx()}};
 }
 export const byId = (rows, id) => rows.find(r=>r.id===id);
 export const active = (s, p) => s.entries.find(e=>e.projectId===p && e.end===null);
@@ -161,16 +173,24 @@ export function summary(entries,range,now) {
   }
   out.unique=lengthOf(union(seg));out.overlap=out.logged-out.unique;return out;
 }
+// Goals survive a change of goal currency: a target saved in another currency is converted.
 export function goal(s,period,at) {
-  const key=keyDate(periodRange(period,at,s.settings.weekStart)[0]);
-  const match=g=>g.period===period&&g.currency===s.settings.currency;
-  const override=s.overrides.find(g=>match(g)&&g.key===key);
-  return override??s.defaults.filter(g=>match(g)&&g.key<=key).sort((a,b)=>b.key.localeCompare(a.key))[0]??{hours:null,money:null};
+  const key=keyDate(periodRange(period,at,s.settings.weekStart)[0]), cc=s.settings.currency;
+  const pick=list=>list.find(g=>g.currency===cc)??list[0];
+  const mine=s.overrides.filter(g=>g.period===period&&g.key===key);
+  let g=mine.length?pick(mine):null;
+  if(!g){
+    const older=s.defaults.filter(g=>g.period===period&&g.key<=key).sort((a,b)=>b.key.localeCompare(a.key));
+    g=older.length?pick(older.filter(x=>x.key===older[0].key)):null;
+  }
+  if(!g)return {hours:null,money:null};
+  return g.currency===cc||g.money===null?g:{...g,money:convert(g.money,g.currency,cc,s.settings.fx),currency:cc,sourceCurrency:g.currency};
 }
 export function saveGoal(s,period,at,hours,money,scope) {
   requireThat(periods.includes(period)&&['overrides','defaults'].includes(scope),'Invalid goal period.');
   const key=keyDate(periodRange(period,at,s.settings.weekStart)[0]), currency=s.settings.currency;
-  const g=s[scope].find(g=>g.period===period&&g.key===key&&g.currency===currency);
+  const same=s[scope].filter(g=>g.period===period&&g.key===key), g=same.find(g=>g.currency===currency)??same[0];
+  s[scope]=s[scope].filter(x=>x===g||!same.includes(x));
   const next={id:g?.id??uid(),period,key,currency,hours,money};
   if(g)Object.assign(g,next);else s[scope].push(next);
 }
@@ -217,6 +237,8 @@ export function validate(s) {
   }
   const sets=Object.fromEntries(names.map(n=>[n,new Map(s[n].map(v=>[v.id,v]))]));
   const pref=s.settings;
+  if (pref && pref.fx === undefined) pref.fx = defaultFx();
+  check(pref&&pref.fx&&typeof pref.fx.rates==='object'&&currencies.every(c=>Number.isFinite(pref.fx.rates[c])&&pref.fx.rates[c]>0)&&(pref.fx.at===null||isTime(pref.fx.at))&&['built-in','ECB','manual'].includes(pref.fx.source),'Invalid exchange rates.');
   check(pref&&['unique','logged','approved'].includes(pref.basis)&&currencies.includes(pref.currency)&&Number.isInteger(pref.weekStart)&&pref.weekStart>=0&&pref.weekStart<7&&periods.includes(pref.period)&&['dark','light','system'].includes(pref.theme)&&[1,5,6,10,15,30].includes(pref.rounding)&&typeof pref.collapsed==='boolean'&&(pref.backupAt===null||isTime(pref.backupAt)),'Invalid settings.');
   for(const c of s.companies)check(textField(c.name)&&c.name.trim()&&currencies.includes(c.currency)&&/^#[a-f\d]{6}$/i.test(c.color)&&textField(c.notes)&&textField(c.billing),'Invalid company.');
   for(const p of s.projects)check(sets.companies.has(p.companyId)&&textField(p.name)&&p.name.trim()&&textField(p.notes)&&textField(p.ref)&&typeof p.archived==='boolean'&&typeof p.favourite==='boolean'&&Number.isFinite(p.order)&&isTime(p.recent),'Invalid project.');
@@ -273,3 +295,36 @@ export function mergeBackup(current,incoming){
   return validate(result);
 }
 function canonical(v){if(!v||typeof v!=='object')return JSON.stringify(v);if(Array.isArray(v))return '['+v.map(canonical).join(',')+']';return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';}
+// Three-way merge for device sync. `base` is the copy both sides last agreed on (an empty
+// state on first sign-in). Edits on one side win; deletions apply unless the other side
+// edited the record; a record edited on both sides keeps the higher revision, else local.
+export function syncMerge(base, local, remote) {
+  const same=(a,b)=>canonical(a)===canonical(b);
+  const result=structuredClone(local);
+  const names=new Set([...Object.keys(local),...Object.keys(remote)].filter(k=>Array.isArray(local[k]??remote[k])));
+  for(const name of names){
+    const B=new Map((base?.[name]??[]).map(r=>[r.id,r])), L=local[name]??[], R=new Map((remote[name]??[]).map(r=>[r.id,r]));
+    const out=[];const seen=new Set();
+    for(const l of L){
+      seen.add(l.id);const r=R.get(l.id), b=B.get(l.id);
+      if(r===undefined){if(!b||!same(b,l))out.push(l);continue;}
+      if(same(l,r)||same(r,b))out.push(l);
+      else if(same(l,b))out.push(structuredClone(r));
+      else out.push((r.revision??-1)>(l.revision??-1)?structuredClone(r):l);
+    }
+    for(const r of R.values()){
+      if(seen.has(r.id))continue;const b=B.get(r.id);
+      if(!b||!same(b,r))out.push(structuredClone(r));
+    }
+    result[name]=out;
+  }
+  const bs=base?.settings??{}, ls=local.settings, rs=remote.settings;
+  for(const k of new Set([...Object.keys(ls),...Object.keys(rs)]))
+    if(!same(ls[k],rs[k])&&same(ls[k],bs[k])&&rs[k]!==undefined)result.settings[k]=structuredClone(rs[k]);
+  if(local.demoOffset===undefined)delete result.demoOffset;
+  // A payment only belongs to a paid entry in the same currency.
+  const entries=new Map(result.entries.map(e=>[e.id,e]));
+  result.payments=result.payments.filter(p=>{const e=entries.get(p.entryId);return e&&e.status==='Paid'&&e.currency===p.currency;});
+  result.payments=result.payments.filter((p,i,a)=>a.findIndex(q=>q.entryId===p.entryId)===i);
+  return validate(result);
+}
