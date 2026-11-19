@@ -1,6 +1,6 @@
 const prefix = 'timeledger-'+self.registration.scope+'-';
-const cacheName = prefix+'v2';
-const assets = ['./','./index.html','./style.css','./app.mjs','./core.mjs','./storage.mjs','./icons.mjs','./sync.mjs','./config.mjs','./manifest.webmanifest','./icon-192.png','./icon-512.png','./apple-touch-icon.png','./mark.png','./contours.svg'];
+const cacheName = prefix+'v3';
+const assets = ['./','./index.html','./style.css','./app.mjs','./core.mjs','./storage.mjs','./icons.mjs','./sync.mjs','./config.mjs','./game.mjs','./sound.mjs','./manifest.webmanifest','./icon-192.png','./icon-512.png','./apple-touch-icon.png','./mark.png','./contours.svg'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(cacheName).then(cache=>cache.addAll(assets)));
 });

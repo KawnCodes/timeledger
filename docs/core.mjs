@@ -54,7 +54,7 @@ export function clockValue(date, clock, later = false) {
 }
 export function emptyState() {
   return {schema:1, companies:[], projects:[], entries:[], rates:[], defaults:[], overrides:[],
-    batches:[], payments:[], adjustments:[], audit:[], settings:{basis:'unique', currency:'GBP', weekStart:1,
+    batches:[], payments:[], adjustments:[], audit:[], targets:[], settings:{sound:true, streak:'worked', restWeekends:true, basis:'unique', currency:'GBP', weekStart:1,
       theme:'system', period:'day', collapsed:false, rounding:1, backupAt:null, fx:defaultFx()}};
 }
 export const byId = (rows, id) => rows.find(r=>r.id===id);
@@ -229,8 +229,10 @@ export function validate(s) {
   const check=(v,m)=>requireThat(v,'Invalid backup or record. '+m);
   check(s&&s.schema===1,'Unsupported schema.');
   if (s.adjustments === undefined) s.adjustments = [];
+  if (s.targets === undefined) s.targets = [];
+  if (s.settings) for (const [k, v] of Object.entries({sound: true, streak: 'worked', restWeekends: true})) if (s.settings[k] === undefined) s.settings[k] = v;
   check(s.demoOffset === undefined || (Number.isSafeInteger(s.demoOffset) && Math.abs(s.demoOffset) <= 26 * HOUR), 'Invalid example clock.');
-  const names=['companies','projects','entries','rates','defaults','overrides','batches','payments','adjustments','audit'];
+  const names=['companies','projects','entries','rates','defaults','overrides','batches','payments','adjustments','audit','targets'];
   for(const name of names){
     const arr=s[name];check(Array.isArray(arr),name+' must be a list.');
     const ids=new Set();for(const item of arr){check(item&&isId(item.id)&&!ids.has(item.id),'Invalid or duplicate '+name+' ID.');ids.add(item.id);}
@@ -238,6 +240,8 @@ export function validate(s) {
   const sets=Object.fromEntries(names.map(n=>[n,new Map(s[n].map(v=>[v.id,v]))]));
   const pref=s.settings;
   if (pref && pref.fx === undefined) pref.fx = defaultFx();
+  check(typeof pref.sound==='boolean'&&['worked','goal'].includes(pref.streak)&&typeof pref.restWeekends==='boolean','Invalid game settings.');
+  for(const t of s.targets)check(['company','project'].includes(t.kind)&&sets[t.kind==='project'?'projects':'companies'].has(t.owner)&&periods.includes(t.period)&&(t.hours===null||(Number.isFinite(t.hours)&&t.hours>0))&&minor(t.money)&&(t.hours!==null||t.money!==null),'Invalid client or project target.');
   check(pref&&pref.fx&&typeof pref.fx.rates==='object'&&currencies.every(c=>Number.isFinite(pref.fx.rates[c])&&pref.fx.rates[c]>0)&&(pref.fx.at===null||isTime(pref.fx.at))&&['built-in','ECB','manual'].includes(pref.fx.source),'Invalid exchange rates.');
   check(pref&&['unique','logged','approved'].includes(pref.basis)&&currencies.includes(pref.currency)&&Number.isInteger(pref.weekStart)&&pref.weekStart>=0&&pref.weekStart<7&&periods.includes(pref.period)&&['dark','light','system'].includes(pref.theme)&&[1,5,6,10,15,30].includes(pref.rounding)&&typeof pref.collapsed==='boolean'&&(pref.backupAt===null||isTime(pref.backupAt)),'Invalid settings.');
   for(const c of s.companies)check(textField(c.name)&&c.name.trim()&&currencies.includes(c.currency)&&/^#[a-f\d]{6}$/i.test(c.color)&&textField(c.notes)&&textField(c.billing),'Invalid company.');

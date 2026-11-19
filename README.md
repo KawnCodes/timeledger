@@ -30,6 +30,16 @@ For a separate deployment that follows `main` directly, go to **Settings → Pag
 - **Reports.** Filter completed work, review overlapping sessions and export CSV or print. The print dialog on iPhone can be used to save or share a PDF. Overlap review includes other projects outside the filter. A zero reportable value explicitly excludes that session’s hours from billing. Exports use the portion inside the selected dates. Printing or downloading a report does not mark work submitted, invoiced or paid.
 - **Goals.** Edit recurring defaults or override one period, including future periods. Blank hours and earnings independently clear those targets. Recurring changes take effect at the beginning of the chosen period. Settings control week start, the hours basis, goal currency and rounding of reportable suggestions.
 
+## Goals, levels and streaks
+
+- **Goals page.** Day, week, month and year progress rings for hours and earnings, edited inline (every period from now, or this period only). **Plan another period** sets targets for a future or past date. Week, month and year cards show the pace forecast and what you need per remaining work day.
+- **Client & project targets.** Hours and/or earnings per company or project per period, in that client's currency.
+- **Activity and history.** A 26-week heatmap of hours or earnings, and hit/miss chips for recent weeks and months.
+- **XP and levels.** 10 XP per worked hour, 5 per focus hour, 1 per €10 earned (unreviewed work counts at its rate), 50/150/500/2,000 for hitting a day/week/month/year goal, 100 per achievement. Everything is recomputed from the ledger, so it's identical on every synced device and doesn't depend on the goal currency.
+- **Streaks.** Consecutive days with at least 30 minutes of work, or with the daily goal hit (Settings). Weekends without work don't break a streak unless you turn that off.
+- **Live earnings.** While a timer runs, Today shows money counting up, with a coin sound every 10 units of the goal currency.
+- **Sound and celebrations.** Timer actions, coins, goals, achievements and level-ups have short sounds synthesised in the browser (no audio files, works offline); mute from the player card or Settings. Goals, achievements and level-ups get confetti once per device. Animations respect the system's reduced-motion setting.
+
 ## What the totals mean
 
 Working intervals use exact timestamps and half-open boundaries. Total project time sums every working segment. Unique clock time uses their union. Overlap excess is total project time minus unique clock time. Two projects working 09:00–12:00 and 10:00–13:00 therefore produce 6 project hours, 4 unique hours and 2 hours of excess.
@@ -76,7 +86,7 @@ Timers save timestamps on each action and reconstruct elapsed time after a resta
 
 ## Tests
 
-From the project root, run **`node --test tests/*.test.mjs`** with Node 22.13 or newer. The deterministic suite covers currency conversion, account sync (against the real server code with SQLite), three-way merge, timers, focus, overlap, DST, calendar goals, billing, allocations, exports, validation, backup merge, persistence transactions and the service-worker cache path.
+From the project root, run **`node --test tests/*.test.mjs`** with Node 22.13 or newer. The deterministic suite covers XP, streaks, goal hits, pace and targets, currency conversion, account sync (against the real server code with SQLite), three-way merge, timers, focus, overlap, DST, calendar goals, billing, allocations, exports, validation, backup merge, persistence transactions and the service-worker cache path.
 
 The separate browser acceptance suite uses an isolated local HTTP server and temporary Chromium profile. Install Python 3, the Playwright Python package and its Chromium browser (`python3 -m playwright install chromium`), then run **`python3 tests/browser_test.py`**. You can also set `CHROMIUM_PATH` to a local Chromium executable. It exercises the real UI, IndexedDB, downloads and a cold browser restart with the server shut down and networking disabled. A physical iPhone remains the final check for Safari installation and native share/print dialogs.
 

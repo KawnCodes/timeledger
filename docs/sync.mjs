@@ -27,7 +27,7 @@ export async function decrypt(text, key) {
   catch (err) { throw new Error(err?.name === 'OperationError' ? 'Unable to decrypt the account data. Check the password.' : err.message); }
 }
 // Fields that belong to this device only and are never shared.
-const local = ['theme', 'collapsed', 'backupAt', 'period'];
+const local = ['theme', 'collapsed', 'backupAt', 'period', 'sound'];
 export function shareable(state) {
   const s = structuredClone(state);
   for (const k of local) delete s.settings[k];
