@@ -45,7 +45,25 @@ function projectInfo(p){
   return {c,color:c.color,ico:glyphs[s.projects.indexOf(p)%glyphs.length]??'projects'};
 }
 function tile(p,small=false){const {color,ico}=projectInfo(p);return '<span class="project-icon '+(small?'small':'')+'" style="--company:'+color+'">'+icon(ico,small?18:21)+'</span>';}
-function toast(text){const el=$('#notice');el.textContent=text;el.classList.add('show');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>el.classList.remove('show'),3300);}
+let undoAction=null;
+function toast(text,undo=null){
+  const el=$('#notice');el.innerHTML='<span>'+h(text)+'</span>'+(undo?'<button type="button" data-action="undo">Undo</button>':'');
+  undoAction=undo;el.classList.toggle('has-undo',!!undo);el.classList.add('show');clearTimeout(toastTimeout);
+  toastTimeout=setTimeout(()=>{el.classList.remove('show');undoAction=null;},undo?10000:3300);
+}
+// Run a change and offer Undo: the records it touched are restored exactly as they were.
+async function writeUndoable(fn,action,entity,message){
+  const before=structuredClone(s);await write(fn,action,entity);const after=s,changes={};
+  for(const name of Object.keys(before).filter(k=>Array.isArray(before[k])&&k!=='audit')){
+    const b=new Map(before[name].map(r=>[r.id,r])),a=new Map((after[name]??[]).map(r=>[r.id,r]));
+    const ids=[...new Set([...b.keys(),...a.keys()])].filter(id=>JSON.stringify(b.get(id))!==JSON.stringify(a.get(id)));
+    if(ids.length)changes[name]=ids.map(id=>[id,b.get(id)??null]);
+  }
+  toast(typeof message==='function'?message():message,Object.keys(changes).length?async()=>{
+    await write(st=>{for(const [name,list] of Object.entries(changes))for(const [id,old] of list){const i=st[name].findIndex(r=>r.id===id);if(old===null){if(i>=0)st[name].splice(i,1);}else if(i>=0)st[name][i]=structuredClone(old);else st[name].push(structuredClone(old));}},'Undo '+action.toLowerCase(),entity);
+    toast('Undone');
+  }:null);
+}
 function showDialog(title,html,save=null,submit='Save changes',foot='',change=null){
   if(!sheet.open)lastDialogFocus=document.activeElement;
   formSave=save;formChange=change;
@@ -92,7 +110,7 @@ function render(){
   const today=view==='Today', headerDate=dateLabel(now(),{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   app.innerHTML='<aside class="sidebar"><div class="brand"><img src="./mark.png" alt=""><span>TimeLedger</span></div><div class="nav-caption">Workspace</div><nav aria-label="Main">'+navHtml()+'</nav>'+(example?'':levelChip('side-level'))+'<div class="side-bottom">'+button('backup','Backup & restore','backup','side-link')+button('settings','Settings','settings','side-link')+workspaceButton()+'</div></aside>'+
     '<div class="mobile-brand"><div class="brand"><img src="./mark.png" alt="">TimeLedger</div>'+levelChip('mobile-level')+ib('workspace',example?'Example workspace':'Personal workspace',example?'layers':'user')+'</div>'+
-    '<main id="main" tabindex="-1"><div class="main-wrap"><header class="page-head"><div><div class="eyebrow">'+(today?icon('today',14)+h(headerDate):'Workspace')+'</div><h1>'+view+'</h1></div><div class="head-actions">'+(view==='Projects'?button('new-project','New project','plus','primary'):button('entry','Add entry','plus','primary'))+ib('settings','Settings','settings','','settings-top')+'</div></header>'+
+    '<main id="main" tabindex="-1"><div class="main-wrap"><header class="page-head"><div><div class="eyebrow">'+(today?icon('today',14)+h(headerDate):'Workspace')+'</div><h1>'+view+'</h1></div><div class="head-actions">'+(view==='Projects'?button('new-project','New project','plus','primary'):button('entry','Add entry','plus','primary'))+'<span id="sync-slot">'+syncIndicator()+'</span>'+ib('settings','Settings','settings','','settings-top')+'</div></header>'+'<div id="sync-banner-slot">'+syncBanner()+'</div>'+
     (!navigator.onLine?'<div class="offline">'+icon('check',15)+'Offline · saved on this device</div>':'')+
     (today?todayPage():view==='Projects'?projectsPage():view==='Goals'?goalsPage():recordsPage())+
     '</div></main><nav class="mobile-nav" aria-label="Mobile navigation">'+navHtml()+'</nav>';
@@ -101,7 +119,7 @@ function render(){
 }
 function goalsPanel(){
   const p=s.settings.period,range=C.periodRange(p,now(),s.settings.weekStart),sum=C.summary(s.entries,range,now()),goal=C.goal(s,p,now());
-  const units=sum[s.settings.basis],earn=combined(sum.money),note=fxNote(sum.money);
+  const units=sum[s.settings.basis],approvedEarn=combined(sum.money),pendingEarn=combined(sum.pending),earn=approvedEarn+pendingEarn,all={...sum.money};for(const [k,v] of Object.entries(sum.pending))all[k]=(all[k]??0)+v;const note=fxNote(all);
   function metric(label,ico,value,current,target,remaining,moneyMode){
     const progress=C.progress(current,target);
     return '<div class="metric '+(moneyMode?'earn':'hours')+'"><div class="metric-name">'+icon(ico,16)+label+'</div><div class="metric-number">'+value+'</div>'+
@@ -109,7 +127,7 @@ function goalsPanel(){
   }
   return '<section class="overview '+(s.settings.collapsed?'collapsed':'')+'"><div class="overview-head"><div class="overview-title">'+icon('target',19)+'<h2>Work overview</h2></div><div class="periods" aria-label="Goal period">'+C.periods.map(n=>'<button data-action="period" data-value="'+n+'" aria-pressed="'+(n===p)+'">'+cap(n)+'</button>').join('')+'</div>'+ib('collapse',s.settings.collapsed?'Expand work overview':'Collapse work overview',s.settings.collapsed?'down':'up','','overview-toggle')+'</div>'+
     (s.settings.collapsed?'':'<div class="metrics">'+metric('Working hours','clock',dur(units),units,goal.hours===null?null:goal.hours*C.HOUR,dur,false)+metric('Estimated earnings','money','<span data-count="'+earn+'" data-key="ov-earn" data-fmt="money">'+money(earn)+'</span>',earn,goal.money,v=>money(v,undefined,true),true)+'</div><div class="overview-foot"><span>'+icon('clock',13)+h(bases[s.settings.basis])+'</span>'+button('goals','Edit goals','sliders','hero-link')+'</div>'+
-    (note?'<p class="fx-note">'+h(note)+'</p>':'')+(sum.incomplete.size?'<div class="estimate-alert">Estimate incomplete · missing hourly rate</div>':''))+'</section>';
+    (pendingEarn?'<p class="fx-note">'+h(money(approvedEarn)+' approved · '+money(pendingEarn)+' awaiting review')+'</p>':'')+(note?'<p class="fx-note">'+h(note)+'</p>':'')+(sum.incomplete.size?'<div class="estimate-alert">Estimate incomplete · missing hourly rate</div>':''))+'</section>';
 }
 function badge(text,cls=''){return '<span class="badge '+cls+'">'+h(text)+'</span>';}
 function stateLabel(e){const st=C.conditionOf(e);return '<span class="state-label '+st.toLowerCase()+'"><i></i>'+st+'</span>';}
@@ -131,7 +149,7 @@ function todayPage(){
   const day=C.periodRange('day',now()),log=s.entries.filter(e=>e.end!==null&&e.start<day[1]&&e.end>day[0]).sort((a,b)=>b.start-a.start);
   return goalsPanel()+playerCard()+'<section>'+section('Quick switch',null,button('favourites','Manage','sliders','text-btn'))+
     (fav.length?'<div class="quick-strip">'+fav.map(quickCard).join('')+'</div>':empty('bolt','Pin your go-to projects','Keep your most-used project timers one tap away.',s.projects.length?'favourites':'new-project',s.projects.length?'Pin projects':'Create a project'))+'</section>'+
-    '<section>'+section('Active timers',active.length,button('choose-timer','Start timer','play','secondary compact'))+
+    longBanner()+'<section>'+section('Active timers',active.length,button('choose-timer','Start timer','play','secondary compact'))+
     '<div class="card">'+(active.length?active.map(activeRow).join(''):empty('timer','No active timers','Start a project timer when you begin working.'))+'</div></section>'+
     '<section>'+section('Daily log',log.length,button('today-sheet','View timesheet','','text-btn'))+
     '<div class="card">'+(log.length?'<div class="log-head"><span>Time</span><span>Project</span><span>Logged</span><span>Status</span></div>'+log.map(dailyRow).join(''):empty('log','No completed entries today','Stopped timers and manual entries appear here.'))+'</div></section>'+
@@ -144,7 +162,7 @@ function tick(){
   liveTick();
   for(const el of $$('[data-elapsed]')){const e=C.byId(s.entries,el.dataset.elapsed);if(e)el.textContent=elapsed(C.lengthOf(C.clip(e.segments,[-Infinity,Infinity],now())));}
   const minute=Math.floor(now()/C.MIN);
-  if(tick.minute!==minute){tick.minute=minute;const panel=$('.overview');if(panel&&!panel.contains(document.activeElement)){panel.outerHTML=goalsPanel();countUp();}const pc=$('.player:not(.big)');if(pc&&!pc.contains(document.activeElement))pc.outerHTML=playerCard();for(const el of $$('.side-level,.mobile-level'))el.outerHTML=levelChip(el.classList[0]);checkCelebrations();}
+  if(tick.minute!==minute){tick.minute=minute;const panel=$('.overview');if(panel&&!panel.contains(document.activeElement)){panel.outerHTML=goalsPanel();countUp();}const pc=$('.player:not(.big)');if(pc&&!pc.contains(document.activeElement))pc.outerHTML=playerCard();if(view==='Today'&&!sheet.open&&$$('.long-banner').length!==longTimers().length)return render();for(const el of $$('.side-level,.mobile-level'))el.outerHTML=levelChip(el.classList[0]);checkCelebrations();}
 }
 function projectsPage(){
   const list=s.projects.filter(p=>p.archived===showArchived).sort((a,b)=>a.name.localeCompare(b.name));
@@ -191,19 +209,19 @@ function recordsPage(){
   const label=dateLabel(range[0])+' – '+dateLabel(range[1]-1);
   const payments={};for(const p of s.payments){const e=C.byId(s.entries,p.entryId);if(p.at>=range[0]&&p.at<range[1]&&(!filter.company||e.companyId===filter.company)&&(!filter.project||e.projectId===filter.project)&&(!filter.status||e.status===filter.status))payments[p.currency]=(payments[p.currency]??0)+p.amount;}
   const metrics=[['Logged time',dur(sum.logged)],['Unique clock time',dur(sum.unique)],['Overlap excess',dur(sum.overlap)],['Reviewed reportable',dur(sum.approved)]];
-  if(report)metrics.push(['Estimated billable',allAmounts(sum.money,sum.incomplete)],['Estimated total in '+s.settings.currency,money(combined(sum.money))+(sum.incomplete.size?' (incomplete)':'')],['Invoiced incl. paid',allAmounts(sum.invoiced,sum.invoicedIncomplete)],['Confirmed receipts¹',allAmounts(payments)]);
+  if(report)metrics.push(['Estimated billable',allAmounts(sum.money,sum.incomplete)],['Awaiting review',Object.keys(sum.pending).length?allAmounts(sum.pending):money(0)],['Estimated total in '+s.settings.currency,money(combined(sum.money)+combined(sum.pending))+(sum.incomplete.size?' (incomplete)':'')],['Invoiced incl. paid',allAmounts(sum.invoiced,sum.invoicedIncomplete)],['Confirmed receipts¹',allAmounts(payments)]);
   return filterUI()+'<section>'+section(label,null)+'<div class="stat-grid">'+metrics.map(([k,v])=>'<div class="stat"><small>'+k+'</small><strong>'+h(v)+'</strong></div>').join('')+'</div>'+(report?hint('¹ Confirmed receipts use the payment date. Work totals use the session dates. Open timers appear on Today.'):'')+'</section>'+
-    '<section>'+section('Work entries',entries.length,report?'<div class="toolbar">'+button('export','CSV','download','secondary compact','data-value="CSV" '+(!entries.length?'disabled':''))+button('export','Print','print','secondary compact','data-value="Print" '+(!entries.length?'disabled':''))+'</div>':'')+'<div class="card">'+(entries.length?reportRows(entries,range):empty('sheet','No entries in this view','Choose another date range or add a work entry.','entry','Add entry'))+'</div></section>'+grouped(entries,range);
+    '<section>'+section('Work entries',entries.length,!report&&entries.some(e=>e.approved===null)?button('approve-all','Approve all ('+entries.filter(e=>e.approved===null).length+')','check','secondary compact'):report?'<div class="toolbar">'+button('export','CSV','download','secondary compact','data-value="CSV" '+(!entries.length?'disabled':''))+button('export','Print','print','secondary compact','data-value="Print" '+(!entries.length?'disabled':''))+'</div>':'')+'<div class="card">'+(entries.length?reportRows(entries,range):empty('sheet','No entries in this view','Choose another date range or add a work entry.','entry','Add entry'))+'</div></section>'+grouped(entries,range);
 }
 document.addEventListener('change',e=>{if(!e.target.closest('.filters'))return;const {name,value}=e.target;if(!value&&['anchor','from','to'].includes(name))return render();filter[name]=value;if(name==='company')filter.project='';if(filter.from>filter.to){if(name==='from')filter.to=filter.from;else filter.from=filter.to;}render();});
 function companyForm(id='',after=null){
   const c=C.byId(s.companies,id),r=c?C.rateAt(s,{id:'',companyId:c.id},now()):null;
   showDialog(c?'Edit company':'New company','<div class="form-grid">'+field('Company name',input('name',c?.name,'text','required maxlength="160"'),true)+field('Colour',input('color',c?.color??'#5377af','color'))+
-    field('Currency',select('currency',options(C.currencies,c?.currency??'GBP'),c?'disabled':''))+field('Default hourly rate',input('rate',amt(r?.rate),'number','min="0" max="100000000" step="0.01" placeholder="Optional"'),true)+field('Billing information',textArea('billing',c?.billing),true)+field('Notes',textArea('notes',c?.notes),true)+'</div>',async d=>{
+    field('Currency',select('currency',options(C.currencies,c?.currency??'GBP'),c?'disabled':''))+field('Default hourly rate',input('rate',amt(r?.rate),'number','min="0" max="100000000" step="0.01" placeholder="Optional"'),true)+field('Billing information',textArea('billing',c?.billing),true)+'<div class="field wide">'+checks('billable','Work is billable by default',c?.billable??true)+'</div>'+field('Notes',textArea('notes',c?.notes),true)+'</div>',async d=>{
       const newId=id||C.uid();await write((st,at)=>{
         const current=C.byId(st.companies,newId),cc=current?.currency??d.currency;
         if(c)C.requireThat(JSON.stringify(c)===JSON.stringify(current)&&C.rateAt(st,{id:'',companyId:id},at).rate===r.rate,'Company changed in another window. Reopen it.');
-        const record={id:newId,name:d.name.trim(),color:d.color,currency:cc,notes:d.notes,billing:d.billing};
+        const record={id:newId,name:d.name.trim(),color:d.color,currency:cc,notes:d.notes,billing:d.billing,billable:!!d.billable};
         if(current)Object.assign(current,record);else st.companies.push(record);
         const rate=decimal(d.rate);if(!c||r.rate!==rate)C.setRate(st,'company',newId,rate,cc,c?at:0);
       },c?'Edit company':'Create company',newId);
@@ -216,7 +234,7 @@ function projectForm(id='',selectedCompany='',after=null){
   const locked=p&&s.entries.some(e=>e.projectId===id);
   const companyCtrl=s.companies.length?select('companyId',s.companies.map(c=>opt(c.id,c.name,chosen)).join(''),p?'disabled':''):input('companyName','','text','required placeholder="Company name" maxlength="160"');
   showDialog(p?'Edit project':'New project','<div class="form-grid">'+field('Project name',input('name',p?.name,'text','required maxlength="160" placeholder="e.g. Brand identity"'),true)+field('Company',companyCtrl,true)+
-    field('Currency',select('currency',opt('','Same as company',p?.currency??'')+options(C.currencies,p?.currency??'')))+field('Project reference',input('ref',p?.ref,'text','placeholder="Optional"'))+field('Hourly rate override (project currency)',input('rate',amt(oldRate),'number','min="0" max="100000000" step="0.01" placeholder="Company default"'))+
+    field('Currency',select('currency',opt('','Same as company',p?.currency??'')+options(C.currencies,p?.currency??'')))+field('Billable',select('billable',[['','Same as company'],['yes','Billable'],['no','Not billable']].map(([v,l])=>opt(v,l,p?.billable==null?'':p.billable?'yes':'no')).join('')))+field('Project reference',input('ref',p?.ref,'text','placeholder="Optional"'))+field('Hourly rate override (project currency)',input('rate',amt(oldRate),'number','min="0" max="100000000" step="0.01" placeholder="Company default"'))+
     field('Notes',textArea('notes',p?.notes),true)+'</div>'+checks('fav','Pin to Quick switch',p?.favourite??true)+(p?checks('archived','Archive project',p.archived):'')+hint('Without a rate override, the company rate is converted into the project currency at the current exchange rate.')+(locked?hint('Historical entries retain their company, currency and recorded rate. A new currency applies to new work.'):''),
     async(d,form)=>{
       const newId=id||C.uid();
@@ -230,7 +248,7 @@ function projectForm(id='',selectedCompany='',after=null){
         const cur=C.byId(st.projects,newId),archived=!!d.archived;
         if(p)C.requireThat(JSON.stringify(cur)===JSON.stringify(p),'Project changed in another window. Reopen it.');
         C.requireThat(!archived||!C.active(st,newId),'Stop this project timer before archiving.');
-        const record={id:newId,companyId:cid,currency:d.currency||null,name:d.name.trim(),ref:d.ref,notes:d.notes,favourite:!archived&&!!d.fav,archived,order:cur?.order??Math.max(-1,...st.projects.map(x=>x.order))+1,recent:cur?.recent??0};
+        const record={id:newId,companyId:cid,currency:d.currency||null,billable:d.billable===''?null:d.billable==='yes',name:d.name.trim(),ref:d.ref,notes:d.notes,favourite:!archived&&!!d.fav,archived,order:cur?.order??Math.max(-1,...st.projects.map(x=>x.order))+1,recent:cur?.recent??0};
         if(cur)Object.assign(cur,record);else st.projects.push(record);
         const rate=decimal(d.rate),cc=C.projectCurrency(st,record);if(rate!==oldRate||(rate!==null&&(p?.currency??null)!==record.currency))C.setRate(st,'project',newId,rate,cc,p?at:0);
       },p?'Edit project':'Create project',newId);
@@ -530,17 +548,17 @@ function ring(ratio,cls,label,value,goalText){
   return '<div class="ring '+cls+(ratio>=1?' hit':'')+'"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="ring-bg" cx="50" cy="50" r="42"/><circle class="ring-fg" cx="50" cy="50" r="42" style="--full:'+C2+';--off:'+(C2*(1-pct))+'"/></svg><div class="ring-in"><b>'+(ratio===null?'—':Math.round(ratio*100)+'%')+'</b><small>'+label+'</small></div><div class="ring-value">'+value+'</div><small class="ring-goal">'+goalText+'</small></div>';
 }
 function periodCard(g,p){
-  const at=now(),r=C.periodRange(p,at,s.settings.weekStart),gl=C.goal(s,p,at),t=G.totals(s,g.days,r),hours=t[s.settings.basis],earn=t.moneyTotal;
+  const at=now(),r=C.periodRange(p,at,s.settings.weekStart),gl=C.goal(s,p,at),t=G.totals(s,g.days,r),hours=t[s.settings.basis],earn=t.earnedTotal;
   const th=gl.hours?gl.hours*C.HOUR:null,res=G.goalResult(s,g.days,p,at);
   const title={day:'Today',week:'This week',month:'This month',year:'This year'}[p];
   const when=p==='day'?dateLabel(r[0],{weekday:'short',day:'numeric',month:'short'}):dateLabel(r[0],{day:'numeric',month:'short'})+' – '+dateLabel(r[1]-1,{day:'numeric',month:'short'});
   const paceLine=(actual,target,fmt)=>{if(p==='day'||!target)return '';const pc=G.pace(s,p,at,actual,target);return '<li>'+(pc.forecast!==null?'On pace for <b>'+fmt(pc.forecast)+'</b> ('+Math.round(100*pc.forecast/target)+'%)':'Pace appears once you start')+(actual<target&&pc.perDay!==null?' · '+fmt(pc.perDay)+' per work day to go':'')+'</li>';};
   const pace=paceLine(hours,th,dur)+paceLine(earn,gl.money,short);
-  return '<article class="goal-card'+(res?.hit?' hit':'')+'"><header><div><h3>'+title+'</h3><small>'+h(when)+'</small></div>'+(res?.hit?'<span class="goal-hit">🏆 Goal hit · +'+G.goalXp[p]+' XP</span>':'')+'</header>'+
+  return '<article class="goal-card'+(res?.hit?' hit':'')+(editingGoals.has(p)?' editing':'')+'"><header><div><h3>'+title+'</h3><small>'+h(when)+'</small></div>'+'<div class="goal-head-actions">'+(res?.hit?'<span class="goal-hit">🏆 +'+G.goalXp[p]+' XP</span>':'')+button('goal-edit',editingGoals.has(p)?'Done':'Edit',editingGoals.has(p)?'':'edit','text-btn','data-value="'+p+'"')+'</div></header>'+
     '<div class="rings">'+ring(th?hours/th:null,'hours','hours','<span data-count="'+hours+'" data-key="g-h-'+p+'" data-fmt="dur" data-from="0">'+dur(hours)+'</span>',th?'of '+dur(th):'No target')+ring(gl.money?earn/gl.money:null,'money','earned','<span data-count="'+earn+'" data-key="g-m-'+p+'" data-fmt="money" data-from="0">'+money(earn)+'</span>',gl.money?'of '+short(gl.money):'No target')+'</div>'+
     (pace?'<ul class="pace">'+pace+'</ul>':'')+
-    '<form class="goal-inline" data-period="'+p+'"><label><span>Hours</span><input name="hours" type="number" step="any" min="0.0001" value="'+h(gl.hours??'')+'" placeholder="—"></label><label><span>'+s.settings.currency+'</span><input name="money" type="number" step="0.01" min="0.01" value="'+h(amt(gl.money))+'" placeholder="—"></label>'+
-    '<label class="scope"><span>Applies to</span><select name="scope"><option value="defaults">Every '+p+' from now</option><option value="overrides">'+title+' only</option></select></label><button class="primary compact" type="submit">Save</button></form></article>';
+    (editingGoals.has(p)?'<form class="goal-inline" data-period="'+p+'"><label><span>Hours</span><input name="hours" type="number" step="any" min="0.0001" value="'+h(gl.hours??'')+'" placeholder="—"></label><label><span>'+s.settings.currency+'</span><input name="money" type="number" step="0.01" min="0.01" value="'+h(amt(gl.money))+'" placeholder="—"></label>'+
+    '<label class="scope"><span>Applies to</span><select name="scope"><option value="defaults">Every '+p+' from now</option><option value="overrides">'+title+' only</option></select></label><button class="primary compact" type="submit">Save</button></form>':'')+'</article>';
 }
 function targetsSection(){
   const owner=t=>t.kind==='company'?C.byId(s.companies,t.owner):C.byId(s.projects,t.owner);
@@ -554,7 +572,7 @@ function targetsSection(){
 function targetForm(id=''){
   const t=C.byId(s.targets,id);
   const choices=s.companies.map(c=>opt('company:'+c.id,'Company · '+c.name+' ('+c.currency+')',t&&t.kind+':'+t.owner))+s.projects.filter(p=>!p.archived||t?.owner===p.id).map(p=>opt('project:'+p.id,'Project · '+p.name+' ('+C.projectCurrency(s,p)+')',t&&t.kind+':'+t.owner)).join('');
-  showDialog(t?'Edit target':'New target','<div class="form-grid">'+field('Target for',select('who',choices,'required'),true)+field('Period',select('period',C.periods.map(p=>opt(p,'Per '+p,t?.period??'month')).join('')))+field('Hours',input('hours',t?.hours??'','number','step="any" min="0.0001" placeholder="Optional"'))+field('Earnings (client currency)',input('money',amt(t?.money),'number','step="0.01" min="0.01" placeholder="Optional"'),true)+'</div>'+hint('Earnings include unreviewed work at its recorded rate.'),
+  showDialog(t?'Edit target':'New target','<div class="form-grid">'+field('Target for',select('who',choices,'required'),true)+field('Period',select('period',C.periods.map(p=>opt(p,'Per '+p,t?.period??'month')).join('')))+field('Hours',input('hours',t?.hours??'','number','step="any" min="0.0001" placeholder="Optional"'))+field('Earnings (client currency)',input('money',amt(t?.money),'number','step="0.01" min="0.01" placeholder="Optional"'),true)+'</div>'+hint('Earnings include billable work awaiting review at its recorded rate.'),
     async d=>{
       const [kind,owner]=d.who.split(':'),hours=d.hours?Number(d.hours):null,m=decimal(d.money);
       C.requireThat(hours!==null||m!==null,'Set an hours or earnings target.');C.requireThat(hours===null||hours>0,'Enter a positive number of hours.');
@@ -597,18 +615,81 @@ function achievementsSection(g){
 function goalsPage(){
   const g=gameState();
   return playerCard(true)+'<section>'+section('Goals at a glance',null,button('goal-advanced','Plan another period','sliders','text-btn'))+'<div class="goal-grid">'+C.periods.map(p=>periodCard(g,p)).join('')+'</div>'+
-    hint('Hours use '+bases[s.settings.basis].toLowerCase()+'. Earnings use approved billable work in every currency, converted to '+s.settings.currency+'. XP, streaks and the live counter also count unreviewed work at its rate.')+'</section>'+
-    targetsSection()+heatmapSection(g)+historySection(g)+achievementsSection(g);
+    hint('Hours use '+bases[s.settings.basis].toLowerCase()+'. Earnings include billable work in every currency, converted to '+s.settings.currency+'; work awaiting review counts at its hourly rate.')+'</section>'+
+    targetsSection()+foldable('activity',heatmapSection(g))+foldable('history',historySection(g))+foldable('achievements',achievementsSection(g));
 }
 document.addEventListener('submit',async e=>{
   const f=e.target.closest('.goal-inline');if(!f)return;e.preventDefault();if(busy)return;busy=true;
   try{
     const d=Object.fromEntries(new FormData(f)),hours=d.hours?Number(d.hours):null;
     C.requireThat(hours===null||hours>0,'Enter a positive number of hours.');
-    await write(st=>{C.saveGoal(st,f.dataset.period,now(),hours,decimal(d.money),d.scope);},'Update goal');sfx('save');toast(cap(f.dataset.period)+' goal saved');
+    await write(st=>{C.saveGoal(st,f.dataset.period,now(),hours,decimal(d.money),d.scope);},'Update goal');editingGoals.delete(f.dataset.period);render();sfx('save');toast(cap(f.dataset.period)+' goal saved');
   }catch(err){errorMessage(err);}finally{busy=false;}
 });
 soundSetting(()=>!!s?.settings.sound);
+function clientForm(){
+  const colors=['#7255ac','#348d84','#bd7942','#5377af','#b5487a','#5f8a3a'];
+  showDialog('New company','<p class="intro">Set up a company and its first project in one step.</p><div class="form-grid">'+
+    field('Company name',input('name','','text','required maxlength="160" placeholder="e.g. Northline"'),true)+
+    field('Currency',select('currency',options(C.currencies,s.settings.currency)))+field('Hourly rate',input('rate','','number','min="0" max="100000000" step="0.01" placeholder="Optional"'))+
+    field('First project',input('project','','text','maxlength="160" placeholder="e.g. Website redesign"'),true)+field('Colour',input('color',colors[s.companies.length%colors.length],'color'))+'</div>'+
+    checks('billable','Work is billable by default',true)+hint('Leave the project blank to add projects later. You can set a different currency or rate per project.'),
+    async d=>{
+      C.requireThat(d.name.trim(),'Enter a company name.');const rate=decimal(d.rate);let pid=null;
+      await write(st=>{
+        const cid=C.uid();st.companies.push({id:cid,name:d.name.trim(),color:d.color,currency:d.currency,notes:'',billing:'',billable:!!d.billable});
+        C.setRate(st,'company',cid,rate,d.currency,0);
+        if(d.project.trim()){pid=C.uid();st.projects.push({id:pid,companyId:cid,currency:null,billable:null,name:d.project.trim(),ref:'',notes:'',archived:false,favourite:true,order:Math.max(-1,...st.projects.map(x=>x.order))+1,recent:0});}
+      },'Create company');
+      sfx('save');closeDialog();toast(pid?'Ready to go: tap '+d.project.trim()+' to start a timer':'Company created');
+    },'Create');
+}
+// ---- Long-running timers ----
+const LONG=10*C.HOUR,longKey=()=>'timeledger-long-'+(example?'example':'personal');
+function longDismissed(){try{return JSON.parse(localStorage.getItem(longKey()))??{};}catch{return {};}}
+function longTimers(){const d=longDismissed(),t=now();return s.entries.filter(e=>e.end===null&&(t-e.start>LONG||C.keyDate(e.start)!==C.keyDate(t))&&!(d[e.id]&&t-d[e.id]<LONG));}
+function longBanner(){
+  return longTimers().map(e=>{const p=C.byId(s.projects,e.projectId),same=C.keyDate(e.start)===C.keyDate(now());
+    return '<div class="long-banner">'+icon('clock',20)+'<div class="grow"><strong>'+h(p.name)+' has been '+(C.conditionOf(e)==='Paused'?'open':'running')+' since '+(same?time(e.start):dateLabel(e.start,{weekday:'short',day:'numeric',month:'short'})+', '+time(e.start))+'</strong><small>Still working? Stop it at the time you finished, or keep it going.</small></div><div class="toolbar">'+button('long-stop-at','Stop at…','stop','primary compact',did(e.id))+button('long-keep','Keep running','','secondary compact',did(e.id))+'</div></div>';}).join('');
+}
+function stopAtForm(entryId){
+  const e=C.byId(s.entries,entryId);if(!e||e.end!==null)return render();
+  const p=C.byId(s.projects,e.projectId),last=Math.max(e.start,...[e.segments,e.pauses,e.focus].flat(2).filter(Number.isFinite));
+  let guess=Math.min(now(),last+Math.min(8*C.HOUR,Math.max(0,now()-last)));guess=Math.max(last,Math.floor(guess/(5*C.MIN))*5*C.MIN);
+  showDialog('Stop '+p.name,'<p class="intro">When did you finish? The session ends then; the time after it is not counted.</p><div class="form-grid">'+field('Date',input('date',C.keyDate(guess),'date','required'))+field('Time',input('time',time(guess),'time','required'))+'</div>'+hint('Last started or resumed '+dateLabel(last,{weekday:'short',day:'numeric',month:'short'})+' at '+time(last)+'.'),
+    async d=>{
+      const at=C.clockValue(d.date,d.time);
+      C.requireThat(at>=last,'Choose a time after '+time(last)+' on '+dateLabel(last)+'.');C.requireThat(at<=now(),'Choose a time that has already passed.');
+      await write(st=>{C.requireThat(C.active(st,e.projectId)?.id===e.id,'This session changed in another window.');C.timer(st,'stop',e.projectId,at);},'stop',e.projectId);
+      sfx('stop');closeDialog();toast('Session saved, ending at '+time(at));
+    },'Stop session');
+}
+// ---- Sync indicator ----
+const syncLost=()=>{try{return localStorage.getItem('timeledger-sync-lost');}catch{return null;}};
+function syncIndicator(){
+  if(example||!sync)return '';const lost=syncLost(),st=sync.status.state;if(!sync.account&&!lost)return '';
+  const k=lost||st==='error'?'error':st==='syncing'?'syncing':st==='offline'?'offline':'ok';
+  return ib('account',{error:'Sync problem',syncing:'Syncing…',offline:'Offline · will sync',ok:'Synced with GitHub'}[k],k==='error'?'alert':'cloud','','sync-ind '+k);
+}
+function syncBanner(){
+  if(example||!sync)return '';const lost=syncLost();
+  if(lost)return '<div class="sync-banner">'+icon('alert',17)+'<span>'+h(lost)+'</span>'+button('account','Reconnect','','secondary compact')+'</div>';
+  if(sync.status.state==='error')return '<div class="sync-banner">'+icon('alert',17)+'<span>Sync problem: '+h(sync.status.error)+'</span>'+button('sync-now','Retry','','secondary compact')+'</div>';
+  return '';
+}
+function syncChanged(st){
+  try{if(st.state==='signed-out'&&st.error)localStorage.setItem('timeledger-sync-lost','GitHub sync stopped: '+st.error);if(st.state==='synced')localStorage.removeItem('timeledger-sync-lost');}catch{}
+  const slot=$('#sync-slot');if(slot)slot.innerHTML=syncIndicator();const b=$('#sync-banner-slot');if(b)b.innerHTML=syncBanner();
+  const el=$('.sync-label');if(el)el.textContent=syncLabel();const ss=$('#sync-status');if(ss)ss.textContent=statusText();
+  if(st.state==='synced'&&st.changed&&!sheet.open)refresh();
+}
+// ---- Collapsible Goals sections ----
+const folds=new Map(),editingGoals=new Set();
+const isOpen=key=>folds.get(key)??innerWidth>760;
+function foldable(key,html){
+  const open=isOpen(key);
+  return html.replace('<section>','<section class="fold'+(open?'':' closed')+'">').replace('<div class="section-head"><h2>','<div class="section-head"><button class="fold-toggle" data-action="fold" data-value="'+key+'" aria-expanded="'+open+'">'+icon(open?'up':'down',16)+'<h2>').replace('</h2>','</h2></button>');
+}
 function downloadFile(content,type,name){const url=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
 function workspaceForm(){
   showDialog('Workspace','<p class="intro">'+(example?'You are exploring sample projects in a separate ledger.':'Your personal ledger is stored on this device.')+'</p>'+button(example?'personal':'example',example?'Open personal workspace':'Explore example workspace','switch','menu-action')+hint(example?'Your personal workspace starts empty.':'The example workspace has its own data and timers.'));
@@ -658,7 +739,22 @@ async function action(name,el){
     case 'heat-mode':heatMode=value;return render();
     case 'target':return targetForm(id);
     case 'new-target':return targetForm();
-    case 'delete-target':if(!confirm('Delete this target?'))return;await write(st=>{st.targets=st.targets.filter(t=>t.id!==id);},'Delete target',id);closeDialog();return toast('Target deleted');
+    case 'delete-target':closeDialog();return writeUndoable(st=>{st.targets=st.targets.filter(t=>t.id!==id);},'Delete target',id,'Target deleted');
+    case 'undo':{const fn=undoAction;undoAction=null;$('#notice').classList.remove('show');if(fn)await fn();return;}
+    case 'approve-all':{
+      const ids=filtered(rangeFor()).filter(e=>e.approved===null).map(e=>e.id);let done=0,skipped=0;
+      await writeUndoable((st,at)=>{
+        const hits=C.overlaps(st,[-Infinity,Infinity],at);
+        for(const eid of ids){const e=C.byId(st.entries,eid);if(!e||e.approved!==null)continue;if(hits.has(e.id)){skipped++;continue;}
+          const v=C.roundForReview(C.lengthOf(C.clip(e.segments,[-Infinity,Infinity],at)),st.settings.rounding);C.recordAdjustment(st,e.id,null,v,at);e.approved=v;e.revision++;done++;}
+      },'Approve entries','',()=>done?'Approved '+done+' '+(done===1?'entry':'entries')+(skipped?' · '+skipped+' overlapping left to review':''):skipped+' overlapping '+(skipped===1?'entry needs':'entries need')+' individual review');
+      if(done)sfx('save');return;
+    }
+    case 'new-client':return clientForm();
+    case 'long-keep':{const d=longDismissed();d[id]=now();try{localStorage.setItem(longKey(),JSON.stringify(d));}catch{}return render();}
+    case 'long-stop-at':return stopAtForm(id);
+    case 'goal-edit':if(editingGoals.has(value))editingGoals.delete(value);else editingGoals.add(value);return render();
+    case 'fold':folds.set(value,!isOpen(value));return render();
     case 'backup':return backupForm();
     case 'rates':return ratesForm();
     case 'rates-fetch':await updateRates(true);return ratesForm();
@@ -672,17 +768,17 @@ async function action(name,el){
       await sync.finishSignIn(mode,p.remote,p.remoteVersion);signInPending=null;await refresh();closeDialog();return toast(mode==='merge'?'Records merged and synced':'Signed in and synced');
     }
     case 'login-cancel':signInPending=null;await sync.cancelSignIn();return accountForm();
-    case 'sync-now':await sync.syncNow();return accountForm();
+    case 'sync-now':await sync.syncNow();return sheet.open?accountForm():render();
     case 'sign-out':if(!confirm('Sign out of GitHub sync on this device? Your records stay on this device and in the repository.'))return;await sync.signOut();render();return accountForm();
     case 'project-tab':projectTab=value;return render();
     case 'archived':showArchived=!showArchived;return render();
     case 'period':await write(st=>{st.settings.period=value;});return;
     case 'collapse':await write(st=>{st.settings.collapsed=!st.settings.collapsed;});return;
-    case 'new-company':return companyForm();
+    case 'new-company':return clientForm();
     case 'new-company-inline':return companyForm('',cid=>projectForm('',cid));
     case 'company':return companyForm(id);
     case 'project':return projectForm(id);
-    case 'new-project':return projectForm();
+    case 'new-project':return s.companies.length?projectForm():clientForm();
     case 'entry-project':return projectForm('','',pid=>entryForm('',pid));
     case 'entry':return entryForm(id);
     case 'delete-company':case 'delete-project':{
@@ -691,19 +787,18 @@ async function action(name,el){
       C.requireThat(!s.entries.some(e=>ids.includes(e.projectId)&&e.end===null),'Stop the running timer for '+(company?'this company':'this project')+' before deleting it.');
       const n=s.entries.filter(e=>ids.includes(e.projectId)).length,plural=(k,w)=>k+' '+w+(k===1?'':'s');
       const what=(company?[plural(ids.length,'project')]:[]).concat(n?[plural(n,'time entry').replace('entrys','entries')]:[]);
-      if(!confirm('Delete '+target.name+(what.length?' and its '+what.join(' and '):'')+'? This cannot be undone. Download a backup first if you might need them.'))return;
-      await write(st=>{company?C.deleteCompany(st,id):C.deleteProjects(st,[id]);},company?'Delete company':'Delete project',id);
       if(filter&&(company?filter.company===id:filter.project===id)){filter.company=company?'':filter.company;filter.project='';}
-      closeDialog();render();return toast((company?'Company':'Project')+' deleted');
+      closeDialog();
+      return writeUndoable(st=>{company?C.deleteCompany(st,id):C.deleteProjects(st,[id]);},company?'Delete company':'Delete project',id,'Deleted '+target.name+(what.length?' and its '+what.join(' and '):''));
     }
     case 'delete-entry':{
       const rev=Number(el.dataset.revision);
-      if(!confirm('Delete this entry, its focus history and any confirmed payment?'))return;
-      await write(st=>{C.requireThat(C.byId(st.entries,id)?.revision===rev,'This entry changed. Reopen it before deleting.');st.entries=st.entries.filter(e=>e.id!==id);st.payments=st.payments.filter(v=>v.entryId!==id);},'Delete entry',id);closeDialog();return toast('Entry deleted');
+      closeDialog();
+      return writeUndoable(st=>{C.requireThat(C.byId(st.entries,id)?.revision===rev,'This entry changed. Reopen it before deleting.');st.entries=st.entries.filter(e=>e.id!==id);st.payments=st.payments.filter(v=>v.entryId!==id);},'Delete entry',id,'Entry deleted');
     }
     case 'project-menu':return menu(p);
     case 'choose-timer':return chooseTimer();
-    case 'quick':if(C.conditionOf(C.active(s,id))!=='Running')return menu(p,true);name='focus';break;
+    case 'quick':{if(p.archived)return menu(p,true);const st=C.conditionOf(C.active(s,id));name=st==='Running'?'focus':st==='Paused'?'resume-focus':'start-focus';break;}
     case 'favourites':return favouritesForm();
     case 'fav-up':case 'fav-down':await write(st=>{C.moveFavourite(st,id,name==='fav-up'?-1:1);},'Reorder favourites');return favouritesForm();
     case 'pin':case 'menu-pin':await write(st=>{const v=C.byId(st.projects,id);v.favourite=!v.favourite;if(v.favourite)v.order=Math.max(0,...st.projects.map(x=>x.order))+1;},'Change favourite',id);return name==='pin'?favouritesForm():closeDialog();
@@ -750,7 +845,7 @@ async function boot(){
     render();setInterval(tick,1000);
     if(!example){
       sync=createSync({ledger:db});
-      sync.onChange(st=>{const el=$('.sync-label');if(el)el.textContent=syncLabel();const ss=$('#sync-status');if(ss)ss.textContent=statusText();if(st.state==='synced'&&st.changed&&!sheet.open)refresh();});
+      sync.onChange(syncChanged);
       await sync.load();scheduleSync(0);setInterval(()=>{if(!document.hidden)scheduleSync(0);},60000);
     }
     updateRates();

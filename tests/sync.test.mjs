@@ -233,3 +233,38 @@ test('deleting a company removes its projects and everything recorded against th
   assert.equal(deleteProjects(s, ['p1']), 1);
   assert.equal(validate(s).entries.length, 0);
 });
+
+const raw = (s, p, start, hours) => { const e = manual(s, p, start, start + hours * HOUR); s.entries.push(e); return e; };
+
+test('billable defaults and earnings awaiting review', () => {
+  const s = ledgerWith(['GBP', 'USD']);
+  s.companies[1].billable = false;
+  const a = raw(s, 'p0', Date.UTC(2026, 0, 5, 9), 2);   // billable by default, £100/h
+  const b = raw(s, 'p1', Date.UTC(2026, 0, 5, 12), 1);  // company not billable
+  assert.equal(a.billable, true);
+  assert.equal(b.billable, false);
+  s.projects[1].billable = true;                          // project overrides its company
+  assert.equal(raw(s, 'p1', Date.UTC(2026, 0, 6, 9), 1).billable, true);
+  validate(s);
+  const sum = summary(s.entries, [0, Date.UTC(2027, 0, 1)], Date.UTC(2027, 0, 1));
+  assert.deepEqual(sum.money, {});
+  assert.deepEqual(sum.pending, {GBP: 20000, USD: 10000});
+  // Approving moves it from pending to approved.
+  Object.assign(a, {approved: 2 * HOUR});
+  const after = summary(s.entries, [0, Date.UTC(2027, 0, 1)], Date.UTC(2027, 0, 1));
+  assert.deepEqual(after.money, {GBP: 20000});
+  assert.deepEqual(after.pending, {USD: 10000});
+});
+
+test('older ledgers upgrade unreviewed work to the billable default once', () => {
+  const s = ledgerWith(['GBP']);
+  const old = raw(s, 'p0', Date.UTC(2026, 0, 5, 9), 1), reviewed = raw(s, 'p0', Date.UTC(2026, 0, 6, 9), 1);
+  old.billable = false; Object.assign(reviewed, {billable: false, approved: HOUR});
+  delete s.settings.billableDefaults; delete s.companies[0].billable;
+  validate(s);
+  assert.equal(s.companies[0].billable, true);
+  assert.equal(old.billable, true, 'unreviewed work follows the new default');
+  assert.equal(reviewed.billable, false, 'a reviewed decision is kept');
+  old.billable = false; validate(s);
+  assert.equal(old.billable, false, 'the upgrade runs only once');
+});

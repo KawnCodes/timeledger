@@ -136,3 +136,33 @@ main section:nth-of-type(2){animation-delay:.04s}main section:nth-of-type(3){ani
 .howto{margin:12px 0;font-size:.84rem;line-height:1.5;border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--tint)}
 .howto summary{cursor:pointer;font-weight:620}.howto ol{margin:8px 0 0;padding-left:20px;display:grid;gap:5px}.howto a{color:var(--blue)}
 .backup-info a{color:var(--blue);word-break:break-all}
+/* ---- UX batch: undo toast, long-running timers, sync status, goals layout ---- */
+#notice{display:flex;align-items:center;gap:14px}
+#notice.has-undo{pointer-events:auto}
+#notice button{color:#ffd166;font-weight:750;padding:4px 2px;font-size:.88rem}
+.long-banner{display:flex;align-items:center;gap:14px;margin:18px 0 0;padding:14px 16px;border-radius:14px;background:var(--goldbg);color:var(--fg);border:1px solid #ffb02066;animation:pop-in .4s cubic-bezier(.2,.9,.3,1.2) both}
+.long-banner>svg{color:var(--gold);flex-shrink:0}.long-banner strong,.long-banner small{display:block}.long-banner small{color:var(--muted);font-size:.8rem;margin-top:2px}
+.long-banner .toolbar{gap:8px;flex-shrink:0}
+.sync-ind{width:40px;height:40px;border-radius:9px;background:var(--surface);border:1px solid var(--border)}
+.sync-ind.ok{color:var(--teal)}.sync-ind.offline{color:var(--muted)}.sync-ind.error{color:var(--danger);border-color:var(--danger)}
+.sync-ind.syncing svg{animation:pulse-op 1s ease-in-out infinite}
+@keyframes pulse-op{50%{opacity:.35}}
+.sync-banner{display:flex;align-items:center;gap:10px;margin:0 0 16px;padding:11px 14px;border-radius:11px;background:#ae42421a;color:var(--danger);font-size:.86rem;border:1px solid #ae424240}
+.sync-banner span{flex:1;color:var(--fg)}
+.goal-head-actions{display:flex;align-items:center;gap:6px}
+.goal-card .text-btn{min-height:28px;padding:2px 4px}
+.fold-toggle{display:flex;align-items:center;gap:8px;color:var(--fg);padding:0;text-align:left}.fold-toggle svg{color:var(--muted)}
+.fold.closed{margin-bottom:0}.fold.closed>:not(.section-head){display:none}
+.fold.closed .section-head>:not(.fold-toggle){display:none}
+@media (max-width:760px){
+  .long-banner{flex-wrap:wrap}.long-banner .toolbar{width:100%}.long-banner .toolbar button{flex:1}
+  .goal-grid{grid-template-columns:1fr 1fr;gap:10px}
+  .goal-card{padding:12px}.goal-card header{flex-direction:column;gap:2px}.goal-card h3{font-size:.92rem}
+  .goal-head-actions{position:absolute;top:8px;right:6px}.goal-card{position:relative}.goal-hit{display:none}
+  .rings{grid-template-columns:1fr 1fr;gap:4px;margin:10px 0 2px}
+  .ring svg,.ring-in{max-width:64px}.ring circle{stroke-width:12}
+  .ring-in b{font-size:.78rem}.ring-in small{display:none}
+  .ring-value{font-size:.74rem}.ring-goal{font-size:.64rem}
+  .pace{font-size:.68rem;padding:6px 8px;line-height:1.35}.goal-card.editing{grid-column:1/-1}
+  .goal-inline{grid-template-columns:1fr 1fr}
+}

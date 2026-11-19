@@ -6,8 +6,7 @@ const DAY = 86400000;
 // Earnings for play: reviewed work uses its approved billable amount; unreviewed work counts
 // at its recorded rate so progress moves while you work.
 export function earned(e, a) {
-  if (e.approved !== null) return e.billable ? a.amount : 0;
-  return e.rate === null ? 0 : Math.round(e.rate * a.logged / C.HOUR);
+  return e.approved !== null ? (e.billable ? a.amount : 0) : a.pending;
 }
 const isWeekend = key => [0, 6].includes(C.localDate(key).getDay());
 const addMoney = (map, cc, v) => { if (v) map[cc] = (map[cc] ?? 0) + v; };
@@ -57,9 +56,9 @@ export function goalResult(s, days, period, at) {
   const range = C.periodRange(period, at, s.settings.weekStart), t = totals(s, days, range);
   const hours = t[s.settings.basis], parts = [];
   if (g.hours) parts.push(hours / (g.hours * C.HOUR));
-  if (g.money) parts.push(t.moneyTotal / g.money);
+  if (g.money) parts.push(t.earnedTotal / g.money);
   const ratio = Math.min(...parts);
-  return {goal: g, range, hours, money: t.moneyTotal, ratio, percent: Math.round(ratio * 100), hit: ratio >= 1};
+  return {goal: g, range, hours, money: t.earnedTotal, ratio, percent: Math.round(ratio * 100), hit: ratio >= 1};
 }
 
 function qualifies(s, days, key) {
@@ -160,7 +159,7 @@ export function play(s, now, fmt = v => (v / 100).toFixed(0)) {
 // Earnings from timers that are running right now, in the goal currency.
 export function live(s, now) {
   const fx = s.settings.fx, cc = s.settings.currency, per = {};
-  for (const e of s.entries) if (e.end === null && e.rate !== null) {
+  for (const e of s.entries) if (e.end === null && e.rate !== null && e.billable) {
     const ms = C.lengthOf(C.clip(e.segments, [-Infinity, Infinity], now));
     per[e.id] = Math.round(e.rate * ms / C.HOUR);
   }

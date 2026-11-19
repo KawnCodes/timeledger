@@ -54,7 +54,7 @@ export function clockValue(date, clock, later = false) {
 }
 export function emptyState() {
   return {schema:1, companies:[], projects:[], entries:[], rates:[], defaults:[], overrides:[],
-    batches:[], payments:[], adjustments:[], audit:[], targets:[], settings:{sound:true, streak:'worked', restWeekends:true, basis:'unique', currency:'GBP', weekStart:1,
+    batches:[], payments:[], adjustments:[], audit:[], targets:[], settings:{billableDefaults:true, sound:true, streak:'worked', restWeekends:true, basis:'unique', currency:'GBP', weekStart:1,
       theme:'system', period:'day', collapsed:false, rounding:1, backupAt:null, fx:defaultFx()}};
 }
 export const byId = (rows, id) => rows.find(r=>r.id===id);
@@ -101,13 +101,15 @@ export function rateAt(s,p,at) {
   const bc=base?.currency??company.currency;
   return {rate:base?.amount==null?null:convert(base.amount,bc,cc,s.settings.fx),currency:cc};
 }
+// Whether new work is billable: the project's choice, else its company's (billable unless turned off).
+export const billableFor=(s,p)=>p.billable??byId(s.companies,p.companyId).billable??true;
 // A project bills in its own currency when set, otherwise in its company's.
 export const projectCurrency=(s,p)=>p.currency??byId(s.companies,p.companyId).currency;
 function baseEntry(s,projectId,at,kind,allowArchived=false) {
   const p=byId(s.projects,projectId);
   requireThat(p&&(allowArchived||!p.archived),'Select an active project.');
   return {id:uid(),kind,projectId,companyId:p.companyId,start:at,end:null,segments:[],pauses:[],focus:[],
-    ...rateAt(s,p,at),billable:false,approved:null,status:'Unreported',notes:'',reference:'',revision:0};
+    ...rateAt(s,p,at),billable:billableFor(s,p),approved:null,status:'Unreported',notes:'',reference:'',revision:0};
 }
 function closeOpen(list,at) { if(list.at(-1)?.[1]===null)list.at(-1)[1]=at; }
 function latest(e) {return Math.max(e.start,...[e.segments,e.pauses,e.focus].flat(2).filter(Number.isFinite));}
@@ -177,12 +179,14 @@ export function entryStats(e,range,now) {
   const before=lengthOf(clip(e.segments,[-Infinity,range[0]],now));
   const allocation=total=>portion(total,before+logged,whole)-portion(total,before,whole);
   const approved=e.approved===null?null:allocation(e.approved);
-  const incomplete=!!(e.billable&&e.approved>0&&e.rate===null&&logged);
+  const incomplete=!!(e.billable&&(e.approved>0||e.approved===null)&&e.rate===null&&logged);
   const amount=e.billable&&e.approved!==null&&e.rate!==null?allocation(portion(e.rate,e.approved,HOUR)):0;
-  return {seg,logged,focus:lengthOf(clip(e.focus,range,now)),breakMs:lengthOf(clip(e.pauses,range,now)),approved,amount,incomplete};
+  // Billable work awaiting review counts at its recorded rate until it is approved.
+  const pending=e.billable&&e.approved===null&&e.rate!==null?portion(e.rate,logged,HOUR):0;
+  return {seg,logged,focus:lengthOf(clip(e.focus,range,now)),breakMs:lengthOf(clip(e.pauses,range,now)),approved,amount,pending,incomplete};
 }
 export function summary(entries,range,now) {
-  const out={logged:0,unique:0,overlap:0,focus:0,approved:0,money:{},invoiced:{},invoicedIncomplete:new Set(),incomplete:new Set()};
+  const out={logged:0,unique:0,overlap:0,focus:0,approved:0,money:{},pending:{},invoiced:{},invoicedIncomplete:new Set(),incomplete:new Set()};
   const seg=[];
   for(const e of entries){
     const a=entryStats(e,range,now);seg.push(...a.seg);
@@ -191,6 +195,7 @@ export function summary(entries,range,now) {
       out.money[e.currency]=(out.money[e.currency]??0)+a.amount;
       if(['Invoiced','Paid'].includes(e.status))out.invoiced[e.currency]=(out.invoiced[e.currency]??0)+a.amount;
     }
+    if(a.pending)out.pending[e.currency]=(out.pending[e.currency]??0)+a.pending;
     if(a.incomplete){
       out.incomplete.add(e.currency);
       if(['Invoiced','Paid'].includes(e.status))out.invoicedIncomplete.add(e.currency);
@@ -256,6 +261,12 @@ export function validate(s) {
   if (s.adjustments === undefined) s.adjustments = [];
   if (s.targets === undefined) s.targets = [];
   if (s.settings) for (const [k, v] of Object.entries({sound: true, streak: 'worked', restWeekends: true})) if (s.settings[k] === undefined) s.settings[k] = v;
+  // One-time upgrade: companies become billable by default, and unreviewed work follows that default.
+  if (s.settings && s.settings.billableDefaults === undefined && Array.isArray(s.companies) && Array.isArray(s.entries) && Array.isArray(s.projects)) {
+    for (const c of s.companies) if (c.billable === undefined) c.billable = true;
+    for (const e of s.entries) { const p = s.projects.find(x => x.id === e.projectId); if (e.approved === null && p && s.companies.some(c => c.id === p.companyId)) e.billable = billableFor(s, p); }
+    s.settings.billableDefaults = true;
+  }
   check(s.demoOffset === undefined || (Number.isSafeInteger(s.demoOffset) && Math.abs(s.demoOffset) <= 26 * HOUR), 'Invalid example clock.');
   const names=['companies','projects','entries','rates','defaults','overrides','batches','payments','adjustments','audit','targets'];
   for(const name of names){
@@ -269,8 +280,8 @@ export function validate(s) {
   for(const t of s.targets)check(['company','project'].includes(t.kind)&&sets[t.kind==='project'?'projects':'companies'].has(t.owner)&&periods.includes(t.period)&&(t.hours===null||(Number.isFinite(t.hours)&&t.hours>0))&&minor(t.money)&&(t.hours!==null||t.money!==null),'Invalid client or project target.');
   check(pref&&pref.fx&&typeof pref.fx.rates==='object'&&currencies.every(c=>Number.isFinite(pref.fx.rates[c])&&pref.fx.rates[c]>0)&&(pref.fx.at===null||isTime(pref.fx.at))&&['built-in','ECB','manual'].includes(pref.fx.source),'Invalid exchange rates.');
   check(pref&&['unique','logged','approved'].includes(pref.basis)&&currencies.includes(pref.currency)&&Number.isInteger(pref.weekStart)&&pref.weekStart>=0&&pref.weekStart<7&&periods.includes(pref.period)&&['dark','light','system'].includes(pref.theme)&&[1,5,6,10,15,30].includes(pref.rounding)&&typeof pref.collapsed==='boolean'&&(pref.backupAt===null||isTime(pref.backupAt)),'Invalid settings.');
-  for(const c of s.companies)check(textField(c.name)&&c.name.trim()&&currencies.includes(c.currency)&&/^#[a-f\d]{6}$/i.test(c.color)&&textField(c.notes)&&textField(c.billing),'Invalid company.');
-  for(const p of s.projects)check(sets.companies.has(p.companyId)&&(p.currency===undefined||p.currency===null||currencies.includes(p.currency))&&textField(p.name)&&p.name.trim()&&textField(p.notes)&&textField(p.ref)&&typeof p.archived==='boolean'&&typeof p.favourite==='boolean'&&Number.isFinite(p.order)&&isTime(p.recent),'Invalid project.');
+  for(const c of s.companies)check((c.billable===undefined||typeof c.billable==='boolean')&&textField(c.name)&&c.name.trim()&&currencies.includes(c.currency)&&/^#[a-f\d]{6}$/i.test(c.color)&&textField(c.notes)&&textField(c.billing),'Invalid company.');
+  for(const p of s.projects)check(sets.companies.has(p.companyId)&&(p.billable===undefined||p.billable===null||typeof p.billable==='boolean')&&(p.currency===undefined||p.currency===null||currencies.includes(p.currency))&&textField(p.name)&&p.name.trim()&&textField(p.notes)&&textField(p.ref)&&typeof p.archived==='boolean'&&typeof p.favourite==='boolean'&&Number.isFinite(p.order)&&isTime(p.recent),'Invalid project.');
   for(const r of s.rates)check(['company','project'].includes(r.kind)&&sets[r.kind==='project'?'projects':'companies'].has(r.owner)&&minor(r.amount)&&currencies.includes(r.currency)&&isTime(r.at),'Invalid rate.');
   const open=new Set(), focusSpans=[];
   for(const e of s.entries){
